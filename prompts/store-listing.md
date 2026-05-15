@@ -52,7 +52,7 @@ MIT License — https://github.com/StephenRJohns/myfolio
 |---|---|
 | **Primary category** | Productivity |
 | **Language** | English (United States) |
-| **Version** | 1.5.0 |
+| **Version** | 1.5.1 |
 | **Homepage URL** | https://github.com/StephenRJohns/myfolio |
 | **Support URL** | https://github.com/StephenRJohns/myfolio/issues |
 | **Privacy policy URL** | https://github.com/StephenRJohns/myfolio/blob/main/legal/PRIVACY.md |
