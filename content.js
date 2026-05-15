@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.16';
+const MF_VERSION = 'v1.4.17';
 
 const state = {
   accounts: [],
@@ -682,23 +682,25 @@ function synthesizeMissingAccountDailies() {
       }
     }
     // Also gather samples of NON-classified txns so we can see what
-    // types are slipping through isCashFlow (e.g. share-transfer codes
-    // that don't match our regex).
+    // types are slipping through isCashFlow.
     const nonCf = allAcctTxns.filter(t => !isCashFlow(t));
     const nonCfTypeCounts = {};
+    const nonCfSamplesByType = {};
     for (const t of nonCf) {
       const k = String(t.type || '').trim() || '(empty)';
       nonCfTypeCounts[k] = (nonCfTypeCounts[k] || 0) + 1;
+      if (!nonCfSamplesByType[k]) {
+        nonCfSamplesByType[k] = { type: t.type, symbol: t.symbol, qty: t.quantity, amt: t.amount, desc: (t.description || '').slice(0, 40), date: t.date };
+      }
     }
-    const nonCfSample = nonCf.slice(0, 8).map(t => ({
-      type: t.type, symbol: t.symbol, qty: t.quantity, amt: t.amount,
-      desc: (t.description || '').slice(0, 40),
-    }));
     dbg('info', `Synthesis for ${acct.name} (${acct.id}): ${allAcctTxns.length} txns, ${acctTxns.length} classified as cash flows, ${cfList.length} with non-zero impact (total $${cfList.reduce((s,cf)=>s+cf.amount,0).toFixed(2)})`, {
       cfSample: cfList.slice(0, 5).map(cf => ({d: cf.date.toISOString().slice(0,10), a: cf.amount.toFixed(2)})),
       rejected: rejected.slice(0, 5),
       nonCfTypeCounts,
-      nonCfSample,
+      // One sample per unique type so we can see what each type code's
+      // representative row looks like (was previously sampling only the
+      // first 8 rows, which were all empty-type intraday trades).
+      nonCfSamplesByType,
     });
 
     const synth = [];
@@ -1312,7 +1314,7 @@ function periodFramesFromSeries(dv) {
 // We treat anything that looks like an external deposit/withdrawal/transfer/
 // rollover/distribution as a cash flow. Internal market activity (buys/sells/
 // dividends/interest reinvested in the account) is NOT a cash flow.
-const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN|ACH FUNDS|BENEFICIARY|JOURNAL)$/;
+const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN|ACH FUNDS|BENEFICIARY|JOURNAL|CDW|CDI|CDIN|CDOUT|TFR|XFRSEC|RECCV)$/;
 const CASH_FLOW_DESC_RE = /\bDEPOSIT\b|\bWITHDRAW|\bTRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL|\bJNL\b|\bACH\b|\bWIRE\b|FUNDING|REDEMPTION|BENEFICIARY|DEATH DISTRIBUTION|FR A\/C|TO A\/C/i;
 const SECURITIES_TRADE_TYPE_RE = /^(BUY|BOT|BUYTOOPEN|BUYTOCLOSE|SELL|SLD|SELLTOOPEN|SELLTOCLOSE|DIV|DIVIDEND|INT|INTEREST|FEE|COMM|EXCH|TAX|SPLIT|MERG)$/;
 // Cash-sweep symbol patterns. The brokerage uses these for the insured cash
