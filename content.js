@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.12';
+const MF_VERSION = 'v1.4.13';
 
 const state = {
   accounts: [],
@@ -2198,10 +2198,16 @@ function renderPerformance() {
         <canvas id="mf-perf-value" style="width:100%;display:block;margin-bottom:28px;height:260px"></canvas>
       ` : ''}
 
-      ${hasPortfolioHistory && allBenchmarksLoaded ? `
+      ${hasPortfolioHistory ? `
         <h3 class="mf-section-title">Growth of $10,000</h3>
         <p class="mf-note" style="margin-top:-8px;margin-bottom:12px">Normalized to $10,000 invested at the start of available history. Compares your portfolio against selected benchmarks.</p>
-        <canvas id="mf-perf-growth" style="width:100%;display:block;margin-bottom:28px;height:300px"></canvas>
+        <div class="mf-chart-wrap" style="position:relative;margin-bottom:28px">
+          <canvas id="mf-perf-growth" style="width:100%;display:block;height:300px"></canvas>
+          <div id="mf-perf-growth-overlay" class="mf-chart-overlay mf-hidden">
+            <span class="mf-spinner"></span>
+            <span class="mf-chart-overlay-text">Loading benchmark data…</span>
+          </div>
+        </div>
       ` : ''}
 
       ${hasAnyReturns ? `
@@ -2351,11 +2357,26 @@ function drawGrowthChart() {
   const portfolioSeries = filteredDailyValues();
   if (!canvas) return;
   if (!portfolioSeries.length) return;
+
+  // Show/hide loading overlay based on whether any selected benchmark is
+  // still being fetched. The chart still draws with whatever's available
+  // so the user sees a partial result while waiting for the rest.
+  const overlay = document.getElementById('mf-perf-growth-overlay');
+  if (overlay) {
+    const stillLoading = getSelectedBenchmarks().some(id => {
+      const b = ALL_BENCHMARKS.find(x => x.id === id);
+      if (!b) return false;
+      const key = b.ticker.toLowerCase();
+      return state.benchmarkLoading.has(key) || (!state.benchmarkSeries[key] && !state.benchmarkErrors[key]);
+    });
+    overlay.classList.toggle('mf-hidden', !stillLoading);
+  }
+
   setupCanvas(canvas, 300);
 
   const ctx = canvas.getContext('2d');
   const W = canvas.offsetWidth, H = 300;
-  const pad = { top: 16, right: 100, bottom: 36, left: 80 };
+  const pad = { top: 16, right: 130, bottom: 36, left: 80 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
@@ -2434,18 +2455,26 @@ function drawGrowthChart() {
 
   drawXAxisDates(ctx, allDates, (date) => xOf(date), H, true);
 
-  // Legend (right side)
-  const lx = pad.left + cw + 10, ly = pad.top + 8;
+  // Legend (right side). Each entry occupies a full row containing the
+  // colour chip, the label, and the final $ value on a second line — needs
+  // ~34px per row so the two text lines don't overlap.
+  const ROW_H = 34;
+  const lx = pad.left + cw + 12, ly = pad.top + 6;
   normalized.forEach((l, i) => {
-    const y = ly + i * 20;
+    const y = ly + i * ROW_H;
+    // Colour chip
     ctx.fillStyle = l.color;
-    ctx.fillRect(lx, y, 12, 3);
-    ctx.fillStyle = '#cbd5e1'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText(l.label, lx + 18, y + 4);
+    ctx.fillRect(lx, y + 4, 14, 3);
+    // Label (line 1)
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '600 11px system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText(l.label, lx + 20, y + 8);
+    // Final $ value (line 2), color-coded vs $10k baseline
     const final = l.points[l.points.length - 1].value;
     ctx.fillStyle = final >= 10000 ? '#4ade80' : '#f87171';
-    ctx.font = '10px system-ui';
-    ctx.fillText(fmt$(Math.round(final)), lx + 18, y + 16);
+    ctx.font = '11px system-ui';
+    ctx.fillText(fmt$(Math.round(final)), lx + 20, y + 22);
   });
 }
 

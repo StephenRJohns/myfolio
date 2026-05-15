@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyFolio",
-  "version": "1.4.12",
+  "version": "1.4.13",
   "description": "A cleaner, modern dashboard overlay for your retirement account. Personal-use tool, no data leaves your browser.",
   "permissions": ["storage", "scripting"],
   "host_permissions": [

@@ -189,6 +189,28 @@
   to { transform: rotate(360deg); }
 }
 
+/* ── Chart loading overlay (covers a canvas while data is fetched) ────────── */
+.mf-chart-wrap { position: relative; }
+.mf-chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(10, 16, 32, 0.78);
+  backdrop-filter: blur(2px);
+  border-radius: 6px;
+  pointer-events: none;
+}
+.mf-chart-overlay.mf-hidden { display: none; }
+.mf-chart-overlay .mf-spinner { width: 18px; height: 18px; border-width: 3px; }
+.mf-chart-overlay-text {
+  font-size: 12px;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
 .mf-kpi-waiting {
   display: flex;
   align-items: center;
