@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "LPL Enhanced Dashboard",
+  "version": "1.0.0",
+  "description": "Enhanced frontend overlay for LPL AccountView",
+  "permissions": ["storage", "scripting"],
+  "host_permissions": ["https://accountview.lpl.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://accountview.lpl.com/*"],
+      "js": ["interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://accountview.lpl.com/*"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LPL Modern Dashboard"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
