@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.5';
+const MF_VERSION = 'v1.4.6';
 
 const state = {
   accounts: [],
@@ -103,7 +103,7 @@ function safeStorageRemove(keys) {
 
 // Load persisted data from storage on startup
 const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const CACHE_SCHEMA_VERSION = 2;  // bump to invalidate older cached series
+const CACHE_SCHEMA_VERSION = 3;  // bump to invalidate older cached series
 safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
   if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
@@ -526,19 +526,21 @@ function backfillAccountValues() {
 
 // Synthesize a daily-value series for accounts that have a current value but
 // no daily history (the brokerage returned an empty dailyValues array). Walks
-// backwards from today's value, subtracting cash flows from later dates.
+// backwards from today's value, subtracting cash flows from later dates:
+//   account_value(date) = current_value - sum_of_cash_flows_strictly_after(date)
 //
-// IMPORTANT: We only synthesize when we can find at least one cash-flow
-// transaction OR the current value is small enough that "flat-line" is
-// believable. Otherwise we'd fabricate a misleading history (e.g. showing a
-// $58k retirement account as $58k all year, when most of that came from a
-// recent $46k deposit). The aggregate then under-represents today's true
-// portfolio total, but at least the shape is honest.
+// When cash-flow transactions exist, the resulting series captures real
+// deposit/withdrawal timing. When none are available, the series degenerates
+// to a flat line at the current value. Flat-line is misleading about history
+// but keeps the chart's ending total consistent with the Total Portfolio KPI
+// — without it, the chart silently drops the account and the two numbers
+// disagree. The "flatLinedAccounts" state tracks which accounts fell back so
+// the banner can disclose this honestly.
 function synthesizeMissingAccountDailies() {
   if (!state.dailyValues.length || !state.accounts.length) return;
   const dates = state.dailyValues.map(d => d.date);
-  let synthesizedCount = 0;
-  let skippedCount = 0;
+  let reconstructed = 0;
+  state.flatLinedAccounts = [];
   const addToAggregate = (dailySeries) => {
     const aggMap = new Map(state.dailyValues.map(d => [d.date, d.value]));
     for (const d of dailySeries) {
@@ -563,18 +565,6 @@ function synthesizeMissingAccountDailies() {
       if (td) cfList.push({ date: td, amount: t.amount || 0 });
     }
 
-    // If we have NO cash-flow evidence and the account is big (>$10k), skip
-    // synthesis entirely — a flat line of its current value across history
-    // would misrepresent the timeline. Better to under-state aggregate than
-    // to fabricate.
-    if (cfList.length === 0 && acct.value > 10000) {
-      skippedCount++;
-      dbg('warn', `Skipping ${acct.name} ($${Math.round(acct.value)}) in chart — no daily history and no cash-flow transactions found to reconstruct it`);
-      continue;
-    }
-
-    // For each anchor date in the aggregate, account_value(date) =
-    // current_value - sum_of_cash_flows_strictly_after(date)
     const synth = [];
     for (const dateStr of dates) {
       const dt = parseDateLoose(dateStr);
@@ -587,12 +577,18 @@ function synthesizeMissingAccountDailies() {
     if (synth.length >= 2) {
       state.accountDailyValues[acct.id] = synth;
       addToAggregate(synth);
-      synthesizedCount++;
-      dbg('ok', `Synthesized ${synth.length} daily values for ${acct.name}`, { current: acct.value, cashFlows: cfList.length });
+      if (cfList.length > 0) {
+        reconstructed++;
+        dbg('ok', `Reconstructed ${synth.length} daily values for ${acct.name} from ${cfList.length} cash flows`, { current: acct.value });
+      } else {
+        state.flatLinedAccounts.push({ name: acct.name, value: acct.value });
+        dbg('info', `Flat-lined ${acct.name} ($${Math.round(acct.value)}) at current value — no cash-flow transactions to reconstruct timing. Visit Activity page to load deposit history.`);
+      }
     }
   }
-  if (synthesizedCount) dbg('ok', `Aggregate daily values rebuilt with ${synthesizedCount} synthesized account series`);
-  if (skippedCount) dbg('info', `${skippedCount} account${skippedCount > 1 ? 's' : ''} excluded from chart — chart may understate total portfolio value`);
+  if (reconstructed || state.flatLinedAccounts.length) {
+    dbg('ok', `Aggregate rebuilt: ${reconstructed} reconstructed, ${state.flatLinedAccounts.length} flat-lined`);
+  }
 }
 
 // Drop any daily-value entries dated after today. Brokerages occasionally
@@ -1534,22 +1530,14 @@ function renderOverview() {
     ? `${fmtDateShort(dv[0].date)} – ${fmtDateShort(dv[dv.length - 1].date)}`
     : '';
 
-  // If the chart's ending value differs materially from the portfolio's
-  // current value, some accounts aren't represented in the chart (the
-  // brokerage didn't supply daily values and we lacked transactions to
-  // reconstruct them). Show a banner so the user knows.
+  // Flat-lined accounts (we don't have daily history for them and couldn't
+  // find cash-flow transactions, so synthesis fell back to a constant equal
+  // to today's value). Chart totals match the KPI, but the historical shape
+  // before the flat-line starts is wrong. Disclose this honestly.
   let chartGapMsg = '';
-  if (hasDailyData && !selectedAcct) {
-    const chartEnd = dv[dv.length - 1].value;
-    const accountTotal = state.accounts
-      .filter(a => a.id !== 'portfolio' && a.value != null)
-      .reduce((s, a) => s + a.value, 0);
-    const portfolioCard = state.accounts.find(a => a.id === 'portfolio');
-    const trueTotal = portfolioCard && portfolioCard.value != null ? portfolioCard.value : accountTotal;
-    if (trueTotal > 0 && Math.abs(trueTotal - chartEnd) / trueTotal > 0.02) {
-      const missing = trueTotal - chartEnd;
-      chartGapMsg = `Chart shows ${fmt$(chartEnd)} of your ${fmt$(trueTotal)} total — ${fmt$(missing)} is in accounts your brokerage did not deliver daily history for. Open the brokerage's Activity page to capture deposit history so the gap can be reconstructed.`;
-    }
+  if (hasDailyData && !selectedAcct && Array.isArray(state.flatLinedAccounts) && state.flatLinedAccounts.length) {
+    const names = state.flatLinedAccounts.map(a => `${a.name} (${fmt$(a.value)})`).join(', ');
+    chartGapMsg = `Chart includes ${names} as a flat line at today's value — the brokerage did not deliver daily history for ${state.flatLinedAccounts.length > 1 ? 'these accounts' : 'this account'} and we have no cash-flow transactions to reconstruct the timing. Click your brokerage's Activity page (or Transactions / History) to capture deposit dates so the curve can be redrawn correctly.`;
   }
 
   return `
