@@ -54,6 +54,24 @@ function dbg(level, msg, detail) {
 function extensionContextValid() {
   try { return !!chrome?.runtime?.id; } catch (e) { return false; }
 }
+
+// Global safety net: suppress "Extension context invalidated" errors that
+// escape any other guard. There are async paths (promise microtasks, setTimeout
+// callbacks scheduled by chrome.* internals, etc.) that can throw after the
+// extension is reloaded — they're harmless because the new content script will
+// take over on the next page load, but they pollute the chrome://extensions
+// errors page if left to bubble.
+(function installContextInvalidatedSink() {
+  const isCtxErr = (m) => typeof m === 'string' && m.includes('Extension context invalidated');
+  window.addEventListener('error', (e) => {
+    const m = (e && (e.error && e.error.message)) || (e && e.message) || '';
+    if (isCtxErr(String(m))) { e.preventDefault(); e.stopImmediatePropagation && e.stopImmediatePropagation(); }
+  }, true);
+  window.addEventListener('unhandledrejection', (e) => {
+    const m = (e && e.reason && e.reason.message) || (e && e.reason) || '';
+    if (isCtxErr(String(m))) { e.preventDefault(); e.stopImmediatePropagation && e.stopImmediatePropagation(); }
+  }, true);
+})();
 function safeStorageGet(keys, cb) {
   if (!extensionContextValid()) { cb && cb({}); return; }
   try {
