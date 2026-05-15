@@ -12,11 +12,13 @@
 
   // ── Fetch interception ──────────────────────────────────────────────────
   const _fetch = window.fetch.bind(window);
-  window.fetch = async function (...args) {
-    const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url ?? '');
+  window.fetch = async function (input, init, ...rest) {
+    const url = typeof input === 'string' ? input : (input?.url ?? '');
+    const method = ((init?.method) || 'GET').toUpperCase();
+    const reqBody = (method !== 'GET' && method !== 'HEAD') ? (init?.body ?? null) : null;
     let response;
     try {
-      response = await _fetch(...args);
+      response = await _fetch(input, init, ...rest);
     } catch (err) {
       window.postMessage({ type: 'MF_NET', url, status: 'fetch-error', err: String(err) }, '*');
       throw err;
@@ -29,7 +31,7 @@
     if (response.ok && looksLikeData(response)) {
       const clone = response.clone();
       clone.json().then(data => {
-        window.postMessage({ type: 'MF_API', url, data }, '*');
+        window.postMessage({ type: 'MF_API', url, method, reqBody, data }, '*');
       }).catch(() => {});
     }
 
@@ -42,21 +44,23 @@
 
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this.__mfUrl = String(url);
-    this.__mfMethod = method;
+    this.__mfMethod = (method || 'GET').toUpperCase();
     return _open.call(this, method, url, ...rest);
   };
 
-  XMLHttpRequest.prototype.send = function (...args) {
+  XMLHttpRequest.prototype.send = function (body, ...rest) {
+    this.__mfBody = (this.__mfMethod !== 'GET' && this.__mfMethod !== 'HEAD') ? (body || null) : null;
     const xhr = this;
     xhr.addEventListener('load', function () {
       const url = xhr.__mfUrl || '';
+      const method = xhr.__mfMethod || 'GET';
       window.postMessage({ type: 'MF_NET', url, status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300 }, '*');
       try {
         const data = JSON.parse(xhr.responseText);
-        window.postMessage({ type: 'MF_API', url, data }, '*');
+        window.postMessage({ type: 'MF_API', url, method, reqBody: xhr.__mfBody, data }, '*');
       } catch (e) {}
     });
-    return _send.apply(this, args);
+    return _send.call(this, body, ...rest);
   };
 
   // ── WebSocket interception ───────────────────────────────────────────────

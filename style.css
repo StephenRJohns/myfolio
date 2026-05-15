@@ -236,7 +236,71 @@
 }
 .mf-kpi-label { font-size: 12px; color: #f1f5f9; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; }
 .mf-kpi-value { font-size: 28px; font-weight: 700; letter-spacing: -1px; color: #f1f5f9; }
+.mf-kpi-value.muted { color: #475569; }
 .mf-kpi-sub { font-size: 13px; margin-top: 6px; }
+.mf-kpi-nav-hint { color: #64748b; font-size: 12px; margin-top: 4px; }
+.mf-kpi.mf-kpi-clickable { cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.mf-kpi.mf-kpi-clickable:hover { background: #243149; border-color: #4f5b7a; }
+.mf-kpi.mf-kpi-clickable:hover .mf-kpi-nav-hint { color: #818cf8; }
+.mf-kpi.mf-kpi-clickable:focus-visible { outline: none; border-color: #818cf8; box-shadow: 0 0 0 2px rgba(129,140,248,0.4); }
+
+/* ── Value Over Time panel ──────────────────────────────────────────────── */
+.mf-vot-container {
+  display: flex;
+  gap: 24px;
+  background: #1e293b;
+  border: 1px solid #293548;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  align-items: flex-start;
+}
+.mf-vot-left {
+  min-width: 190px;
+  max-width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mf-vot-right { flex: 1; min-width: 0; }
+.mf-vot-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #64748b;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.mf-vot-stat-value { font-size: 18px; font-weight: 700; color: #f1f5f9; letter-spacing: -0.5px; }
+.mf-vot-end-value { font-size: 21px; }
+.mf-vot-stat-date { font-size: 11px; color: #475569; margin-top: 1px; }
+.mf-vot-divider { border: none; border-top: 1px solid #293548; margin: 2px 0; }
+.mf-vot-empty { font-size: 12px; color: #475569; }
+
+/* ── Overview chart period tabs ─────────────────────────────────────────── */
+.mf-chart-period-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #293548;
+  margin-bottom: 10px;
+}
+.mf-chart-period {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mf-chart-period:hover { color: #94a3b8; }
+.mf-chart-period.active { color: #818cf8; border-bottom-color: #818cf8; font-weight: 600; }
 
 /* ── Account cards ───────────────────────────────────────────────────────── */
 .mf-account-grid {
@@ -578,7 +642,72 @@
   50% { opacity: 1; }
 }
 
-#mf-alloc-chart { display: block; }
+#mf-alloc-chart { display: block; flex-shrink: 0; }
+
+/* ── Allocation donut + legend layout ──────────────────────────────────────── */
+.mf-alloc-container {
+  display: flex;
+  align-items: flex-start;
+  gap: 32px;
+}
+.mf-alloc-legend {
+  flex: 1;
+  min-width: 0;
+  padding-top: 8px;
+}
+.mf-alloc-legend-hdr {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0 16px;
+  padding: 0 0 8px 24px;
+  border-bottom: 1px solid #1e293b;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+}
+.mf-alloc-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: center;
+  gap: 0 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid #1a2540;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-radius: 4px;
+}
+.mf-alloc-row:hover { background: rgba(255,255,255,0.03); }
+.mf-alloc-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.mf-alloc-name {
+  font-size: 13px;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mf-alloc-val {
+  font-size: 12px;
+  color: #64748b;
+  text-align: right;
+  white-space: nowrap;
+}
+.mf-alloc-pct {
+  font-size: 13px;
+  color: #94a3b8;
+  text-align: right;
+  min-width: 48px;
+}
+.mf-alloc-row.active .mf-alloc-name { color: #f1f5f9; font-weight: 600; }
+.mf-alloc-row.active .mf-alloc-pct  { color: #818cf8; font-weight: 600; }
+.mf-alloc-row:hover .mf-alloc-name  { color: #e2e8f0; }
 
 /* ── Benchmark picker ────────────────────────────────────────────────────── */
 .mf-bm-picker {

@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.2.0';
+const MF_VERSION = 'v1.3.1';
 
 const state = {
   accounts: [],
@@ -19,10 +19,11 @@ const state = {
   selectedAssetClass: null,   // asset-class label set by clicking an allocation slice
   selectedSymbol: null,       // ticker drilled into from a Holdings row
   helpOpen: false,
-  holdingsPage: 1, holdingsPageSize: 25,
+  holdingsPage: 1, holdingsPageSize: 10,
   holdingsSort: { col: 'value', dir: 'desc' },
-  txnPage: 1, txnPageSize: 25,
+  txnPage: 1, txnPageSize: 10,
   txnSort: { col: 'date', dir: 'desc' },
+  overviewChartPeriod: 'ytd',
   overlayOpen: false,
   apiCallCount: 0,
   lastApiTime: null,
@@ -45,13 +46,58 @@ function dbg(level, msg, detail) {
   if (state.activeTab === 'debug') renderDebugTab();
 }
 
-// Load historical timing data from storage on startup
-chrome.storage.local.get(['loadTimes'], (result) => {
+// Load persisted data from storage on startup
+const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
+chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues'], (result) => {
   const times = result.loadTimes || [];
-  if (times.length) {
-    state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
+  if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
+
+  // Restore cached daily values (expire after 24h so stale data doesn't linger)
+  const dv = result.cachedDailyValues;
+  if (dv && dv.data?.length && (Date.now() - (dv.savedAt || 0)) < DAILY_VALUES_TTL) {
+    state.dailyValues = dv.data;
+    dbg('info', `Restored ${dv.data.length} daily values from cache (saved ${new Date(dv.savedAt).toLocaleTimeString()})`);
+  }
+  const adv = result.cachedAccountDailyValues;
+  if (adv && adv.data && (Date.now() - (adv.savedAt || 0)) < DAILY_VALUES_TTL) {
+    state.accountDailyValues = adv.data;
+    dbg('info', `Restored per-account daily values from cache`);
   }
 });
+
+// Proactively re-fetch the account-vot endpoint using saved request details.
+// Runs when we have account data but no daily value history yet.
+async function proactiveFetchVot() {
+  if (state.dailyValues.length >= 2) return;
+  const result = await chrome.storage.local.get(['accountVotRequest']);
+  const req = result.accountVotRequest;
+  if (!req?.url) {
+    dbg('info', 'Proactive VoT fetch: no saved URL yet — will capture on first account-vot intercept');
+    return;
+  }
+  // Don't replay a week-old URL (session will have expired)
+  if (Date.now() - req.savedAt > 7 * 24 * 60 * 60 * 1000) {
+    dbg('info', 'Proactive VoT fetch: saved request too old, skipping');
+    return;
+  }
+  dbg('info', `Proactive VoT fetch (${req.method})`, { url: req.url });
+  try {
+    const init = { credentials: 'include' };
+    if (req.method === 'POST' && req.reqBody) {
+      init.method = 'POST';
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = typeof req.reqBody === 'string' ? req.reqBody : JSON.stringify(req.reqBody);
+    }
+    const resp = await fetch(req.url, init);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    dbg('ok', 'Proactive VoT fetch succeeded — parsing daily values');
+    parseApiResponse(req.url, data);
+    refreshOverlay();
+  } catch (err) {
+    dbg('warn', 'Proactive VoT fetch failed', { err: String(err) });
+  }
+}
 
 function recordLoadTime(ms) {
   if (state.sessionRecorded) return;
@@ -74,10 +120,14 @@ window.addEventListener('message', (event) => {
   if (msg.type === 'MF_NET') {
     dbg('info', `${msg.ok ? '✔' : '✘'} ${msg.status}  ${msg.url}`);
   } else if (msg.type === 'MF_API') {
-    const { url, data } = msg;
+    const { url, method, reqBody, data } = msg;
     const topKeys = data && typeof data === 'object' ? Object.keys(data) : [];
     dbg('info', `JSON body parsed`, { url, topKeys, type: Array.isArray(data) ? `array[${data.length}]` : typeof data });
     parseApiResponse(url, data);
+    // Save account-vot request so we can replay it proactively on future page loads
+    if (url.toLowerCase().includes('account-vot')) {
+      chrome.storage.local.set({ accountVotRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
+    }
   } else if (msg.type === 'MF_WS_OPEN') {
     dbg('warn', `WebSocket opened — data may flow through this`, { url: msg.url });
   } else if (msg.type === 'MF_WS_MSG') {
@@ -114,6 +164,9 @@ function parseApiResponse(url, data) {
       backfillAccountValues();
       dbg('ok', `AccountInfo: portfolio $${cd.portfolioBalance}, ${accts.length} accounts`, { dayChange: cd.dayChange, dayChangePct: cd.dayChangePercentage });
       refreshOverlay();
+      // If account-vot hasn't delivered daily values yet, proactively fetch it
+      // (5s delay lets LPL's own call arrive naturally first)
+      setTimeout(() => { if (!state.dailyValues.length) proactiveFetchVot(); }, 5000);
     } else {
       dbg('warn', 'AccountInfo: missing portfolioBalance', { keys: Object.keys(cd || {}), sample: JSON.stringify(data).slice(0, 400) });
     }
@@ -215,11 +268,21 @@ function parseApiResponse(url, data) {
       for (const acct of accts) {
         const acctId = String(acct.accountId || acct.accountNumber || '');
         const cd = acct.chartData || {};
+        // LPL uses various field names for the daily series — try them all
+        const dvArray = cd.dailyValues || cd.DailyValues || cd.dailyValue ||
+                        cd.chartPoints || cd.dataPoints || cd.points ||
+                        cd.performanceData || cd.historicalData || cd.data || [];
+        const cdKeys = Object.keys(cd);
+        if (cdKeys.length && !dvArray.length) {
+          dbg('info', `account-vot chartData keys for ${acctId} (no dailyValues found)`, { keys: cdKeys, sample: JSON.stringify(cd).slice(0, 300) });
+        }
         const acctSeries = [];
-        for (const dv of (cd.dailyValues || [])) {
-          const d = dv.date || dv.asOfDate || dv.Date;
-          const v = toNum(dv.endValue ?? dv.value ?? dv.portfolioValue ?? dv.Value ?? dv.EndValue);
-          if (d && v != null) {
+        for (const dv of dvArray) {
+          const d = dv.date || dv.asOfDate || dv.Date || dv.dt || dv.d || dv.tradingDate;
+          const v = toNum(dv.endValue ?? dv.value ?? dv.portfolioValue ?? dv.Value ??
+                          dv.EndValue ?? dv.totalValue ?? dv.marketValue ?? dv.balance ??
+                          dv.close ?? dv.v ?? dv.amount);
+          if (d && v != null && v > 0) {
             byDate[d] = (byDate[d] || 0) + v;
             acctSeries.push({ date: d, value: v });
           }
@@ -248,6 +311,12 @@ function parseApiResponse(url, data) {
       if (sorted.length) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
         dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
+        // Persist so the chart survives page reloads without revisiting Performance page
+        const now = Date.now();
+        chrome.storage.local.set({
+          cachedDailyValues: { data: state.dailyValues, savedAt: now },
+          cachedAccountDailyValues: { data: state.accountDailyValues, savedAt: now },
+        });
       } else {
         dbg('info', 'account-vot: no dailyValues (may need a longer date range)', { perAccount: acctDiag });
       }
@@ -334,6 +403,9 @@ function backfillAccountValues() {
 
 // ── Brokerage-specific normalizers (field names from awsp.myaccountviewonline.com) ─
 const ACCOUNT_VALUE_FIELDS = [
+  // LPL-specific fields seen in the wild (highest priority first)
+  'totalAccountValue',
+  // Common explicit names
   'marketValue', 'totalValue', 'accountValue', 'balance',
   'endingMarketValue', 'currentMarketValue', 'endBalance',
   'currentBalance', 'accountBalance', 'endingBalance',
@@ -342,6 +414,8 @@ const ACCOUNT_VALUE_FIELDS = [
   'totalMarketValue', 'value', 'acctMktVal', 'assetValue',
   'currentValue', 'totalAssets', 'currentAssetValue',
   'acctBalance', 'totalBalance', 'marketBalance',
+  // Do NOT include prvDayMarketValue / prvDaySecurityValue here —
+  // those are yesterday's values and would silently show stale data.
 ];
 
 function detectAccountValue(a) {
@@ -546,9 +620,33 @@ function buildOverlay() {
   if (bodyEl) {
     bodyEl.addEventListener('click', (e) => {
       // Breadcrumb chip clears
-      if (e.target.closest('#mf-back-all'))     { state.selectedAccountId = null; renderContent(); return; }
-      if (e.target.closest('#mf-clear-class'))  { state.selectedAssetClass = null; renderContent(); return; }
-      if (e.target.closest('#mf-clear-symbol')) { state.selectedSymbol = null;     renderContent(); return; }
+      if (e.target.closest('#mf-back-all'))     { e.stopPropagation(); state.selectedAccountId = null; renderContent(); return; }
+      if (e.target.closest('#mf-clear-class'))  { e.stopPropagation(); state.selectedAssetClass = null; renderContent(); return; }
+      if (e.target.closest('#mf-clear-symbol')) { e.stopPropagation(); state.selectedSymbol = null;     renderContent(); return; }
+
+      // Overview chart period tab
+      const periodBtn = e.target.closest('.mf-chart-period[data-chart-period]');
+      if (periodBtn) {
+        e.stopPropagation();
+        state.overviewChartPeriod = periodBtn.dataset.chartPeriod;
+        document.querySelectorAll('.mf-chart-period').forEach(b => b.classList.remove('active'));
+        periodBtn.classList.add('active');
+        const series = getOverviewChartSeries();
+        const s = getOverviewChartStats(series, filteredTransactions());
+        if (s) renderVotStats(s);
+        drawOverviewChart();
+        return;
+      }
+
+      // Positions KPI → Holdings tab
+      if (e.target.closest('#mf-positions-kpi')) {
+        state.activeTab = 'holdings';
+        document.querySelectorAll('.mf-tab').forEach(b => {
+          b.classList.toggle('active', b.dataset.tab === 'holdings');
+        });
+        renderContent();
+        return;
+      }
 
       // Pagination button
       const pager = e.target.closest('.mf-pager');
@@ -779,7 +877,16 @@ function filteredTransactions() {
 
 function filteredDailyValues() {
   const acct = getSelectedAccount();
-  if (acct && state.accountDailyValues[acct.id]) return state.accountDailyValues[acct.id];
+  if (acct) {
+    const perAcct = state.accountDailyValues[acct.id];
+    if (perAcct && perAcct.length >= 2) return perAcct;
+    // No per-account series yet (user hasn't visited LPL Performance page for this
+    // account). Fall back to the aggregate so charts still render.
+    if (state.dailyValues.length >= 2) {
+      dbg('info', `No per-account daily values for ${acct.name} — showing aggregate series`);
+      return state.dailyValues;
+    }
+  }
   return state.dailyValues;
 }
 
@@ -1108,13 +1215,16 @@ function renderContent() {
   const body = document.getElementById('mf-body');
   if (!body) return;
   const tab = state.activeTab || 'overview';
-  if (tab === 'overview') body.innerHTML = renderOverview();
-  else if (tab === 'holdings') body.innerHTML = renderHoldings();
-  else if (tab === 'transactions') body.innerHTML = renderTransactions();
-  else if (tab === 'performance') { body.innerHTML = renderPerformance(); initPerformanceCharts(); return; }
-  else if (tab === 'debug') renderDebugTab();
-
-  if (tab === 'overview' || tab === 'holdings') renderAllocationChart();
+  if (tab === 'overview') {
+    body.innerHTML = renderOverview();
+    renderAllocationChart();
+    initOverviewChart();
+    return;
+  }
+  if (tab === 'holdings') { body.innerHTML = renderHoldings(); renderAllocationChart(); return; }
+  if (tab === 'transactions') { body.innerHTML = renderTransactions(); return; }
+  if (tab === 'performance') { body.innerHTML = renderPerformance(); initPerformanceCharts(); return; }
+  if (tab === 'debug') renderDebugTab();
 }
 
 function renderOverview() {
@@ -1131,7 +1241,6 @@ function renderOverview() {
     kpiChangePct = selectedAcct.changePct != null ? selectedAcct.changePct : null;
     ytd = selectedAcct.ytdReturn;
   } else {
-    // Exclude portfolio sentinel from the per-account sum, but use it if present for accuracy
     const portfolio = state.accounts.find(a => a.id === 'portfolio');
     const indivAccts = state.accounts.filter(a => a.id !== 'portfolio' && !isHiddenZeroAccount(a));
     const total = portfolio ? portfolio.value : indivAccts.reduce((s, a) => s + (a.value || 0), 0);
@@ -1143,8 +1252,6 @@ function renderOverview() {
     ytd = state.performance.ytdReturn;
   }
 
-  // MTD / YTD / 1Y via Modified Dietz on the (filtered) daily-value series +
-  // transactions. LPL's own per-account YTD (true TWR) is preferred where present.
   const dv = filteredDailyValues();
   const txns = filteredTransactions();
   const framed = periodFramesAccurate(dv, txns);
@@ -1153,6 +1260,8 @@ function renderOverview() {
   const oneY = framed.oneY;
 
   const positionsCount = filteredPositions().length;
+  const p = state.overviewChartPeriod || 'ytd';
+  const hasDailyData = dv.length >= 2;
 
   return `
     <div class="mf-section">
@@ -1165,26 +1274,41 @@ function renderOverview() {
             ? `<div class="mf-kpi-sub ${kpiChange >= 0 ? 'pos' : 'neg'}">${kpiChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(kpiChange))}${kpiChangePct != null ? ` (${fmtPct(kpiChangePct)})` : ''} today</div>`
             : `<div class="mf-kpi-waiting"><span class="mf-spinner"></span> Waiting for data…</div>`}
         </div>
-        ${mtd != null ? `
         <div class="mf-kpi">
           <div class="mf-kpi-label">MTD Return</div>
-          <div class="mf-kpi-value ${mtd >= 0 ? 'pos' : 'neg'}">${fmtPct(mtd)}</div>
-        </div>` : ''}
-        ${ytd != null ? `
+          <div class="mf-kpi-value ${mtd != null ? (mtd >= 0 ? 'pos' : 'neg') : 'muted'}">${mtd != null ? fmtPct(mtd) : '—'}</div>
+        </div>
         <div class="mf-kpi">
           <div class="mf-kpi-label">YTD Return</div>
-          <div class="mf-kpi-value ${ytd >= 0 ? 'pos' : 'neg'}">${fmtPct(ytd)}</div>
-        </div>` : ''}
-        ${oneY != null ? `
+          <div class="mf-kpi-value ${ytd != null ? (ytd >= 0 ? 'pos' : 'neg') : 'muted'}">${ytd != null ? fmtPct(ytd) : '—'}</div>
+        </div>
         <div class="mf-kpi">
           <div class="mf-kpi-label">1-Year Return</div>
-          <div class="mf-kpi-value ${oneY >= 0 ? 'pos' : 'neg'}">${fmtPct(oneY)}</div>
-        </div>` : ''}
+          <div class="mf-kpi-value ${oneY != null ? (oneY >= 0 ? 'pos' : 'neg') : 'muted'}">${oneY != null ? fmtPct(oneY) : '—'}</div>
+        </div>
         ${positionsCount ? `
-        <div class="mf-kpi">
+        <div class="mf-kpi mf-kpi-clickable" id="mf-positions-kpi" role="button" tabindex="0" title="View Holdings">
           <div class="mf-kpi-label">Positions</div>
           <div class="mf-kpi-value">${positionsCount}</div>
+          <div class="mf-kpi-sub mf-kpi-nav-hint">Holdings →</div>
         </div>` : ''}
+      </div>
+
+      <h3 class="mf-section-title">Value Over Time</h3>
+      <div class="mf-vot-container">
+        <div class="mf-vot-left" id="mf-vot-stats">
+          <div class="mf-vot-empty">Waiting for data…</div>
+        </div>
+        <div class="mf-vot-right">
+          <div class="mf-chart-period-bar">
+            ${['all','1y','ytd','1m'].map(id => {
+              const labels = { all: 'All', '1y': '1 Year', ytd: 'YTD', '1m': '1 Month' };
+              return `<button class="mf-chart-period${p === id ? ' active' : ''}" data-chart-period="${id}">${labels[id]}</button>`;
+            }).join('')}
+          </div>
+          <canvas id="mf-overview-chart" style="width:100%;display:block;height:220px"></canvas>
+          ${!hasDailyData ? `<p class="mf-note" style="margin-top:8px">Waiting for LPL's Value Over Time data — it loads automatically from the same page. If this persists after 10 seconds, try scrolling down on the LPL page to trigger their chart section.</p>` : ''}
+        </div>
       </div>
 
       ${!selectedAcct && hasAccounts ? `
@@ -1204,7 +1328,10 @@ function renderOverview() {
 
       ${positionsCount ? `
       <h3 class="mf-section-title">Allocation</h3>
-      <canvas id="mf-alloc-chart" width="400" height="220"></canvas>` : ''}
+      <div class="mf-alloc-container">
+        <canvas id="mf-alloc-chart" width="240" height="240"></canvas>
+        <div class="mf-alloc-legend" id="mf-alloc-legend"></div>
+      </div>` : ''}
     </div>
   `;
 }
@@ -1239,7 +1366,10 @@ function renderHoldings() {
     <div class="mf-section">
       ${renderBreadcrumb()}
       <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a row to see its transactions · click a header to sort</span></h3>
-      <canvas id="mf-alloc-chart" width="400" height="220" style="margin-bottom:24px"></canvas>
+      <div class="mf-alloc-container" style="margin-bottom:24px">
+        <canvas id="mf-alloc-chart" width="240" height="240"></canvas>
+        <div class="mf-alloc-legend" id="mf-alloc-legend"></div>
+      </div>
       ${renderPaginationBar('holdings', sorted.length, page, state.holdingsPageSize)}
       <table class="mf-table">
         <thead><tr>
@@ -1876,9 +2006,9 @@ function drawXAxisDates(ctx, dates, xOf, H, byDate = false) {
 
 function fmtDateShort(d) {
   if (!d) return '';
-  const dt = new Date(d);
-  if (isNaN(dt)) return String(d).slice(0, 10);
-  return dt.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  const dt = parseDateLoose(d);
+  if (!dt) return String(d).slice(0, 10);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // ── Debug tab ────────────────────────────────────────────────────────────────
@@ -1999,14 +2129,18 @@ function renderAllocationChart() {
 
   const groups = buildAllocationGroups(positions);
 
-  const colors = ['#6366f1','#8b5cf6','#a78bfa','#c4b5fd','#818cf8',
-                   '#4f46e5','#7c3aed','#5b21b6','#4338ca','#64748b'];
+  const colors = ['#3b82f6','#64748b','#22c55e','#f97316','#a855f7',
+                   '#ef4444','#eab308','#06b6d4','#ec4899','#84cc16'];
 
-  const cx = 110, cy = 110, r = 90, hole = 52;
+  const size = 240;
+  canvas.width = size; canvas.height = size;
+  canvas.style.width = size + 'px'; canvas.style.height = size + 'px';
+
+  const cx = size / 2, cy = size / 2, r = 100, hole = 62;
   let angle = -Math.PI / 2;
-  const slices = []; // for hit-testing
+  const slices = [];
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, size, size);
 
   const highlightLabel = state.selectedAssetClass;
 
@@ -2018,10 +2152,10 @@ function renderAllocationChart() {
     const endAngle = angle + sliceAngle;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, r + (isHighlighted ? 4 : 0), startAngle, endAngle);
+    ctx.arc(cx, cy, r + (isHighlighted ? 5 : 0), startAngle, endAngle);
     ctx.closePath();
     ctx.fillStyle = colors[i % colors.length];
-    ctx.globalAlpha = isDimmed ? 0.35 : 1;
+    ctx.globalAlpha = isDimmed ? 0.3 : 1;
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.strokeStyle = '#0f172a';
@@ -2031,90 +2165,316 @@ function renderAllocationChart() {
     angle = endAngle;
   });
 
-  // Hole
+  // Donut hole
   ctx.beginPath();
   ctx.arc(cx, cy, hole, 0, 2 * Math.PI);
   ctx.fillStyle = '#0f172a';
   ctx.fill();
 
-  // Center label
+  // Center text
   ctx.fillStyle = '#f1f5f9';
-  ctx.font = 'bold 13px system-ui';
+  ctx.font = 'bold 14px system-ui';
   ctx.textAlign = 'center';
   ctx.fillText(fmt$(total), cx, cy - 4);
   ctx.font = '11px system-ui';
-  ctx.fillStyle = '#94a3b8';
+  ctx.fillStyle = '#64748b';
   ctx.fillText(highlightLabel ? 'Filtered' : 'Total', cx, cy + 14);
 
-  // Legend — every category, full name, value + %
-  const lx = 240, ly = 14;
-  ctx.font = '12px system-ui';
-  groups.forEach((g, i) => {
-    const y = ly + i * 22;
-    const isHighlighted = highlightLabel === g.label;
-    const isDimmed = highlightLabel && !isHighlighted;
-    ctx.globalAlpha = isDimmed ? 0.4 : 1;
-    ctx.fillStyle = colors[i % colors.length];
-    ctx.fillRect(lx, y, 12, 12);
-    ctx.fillStyle = isHighlighted ? '#f1f5f9' : '#cbd5e1';
-    ctx.font = (isHighlighted ? 'bold ' : '') + '12px system-ui';
-    ctx.textAlign = 'left';
-    // Truncate label to fit
-    const maxLabelWidth = 200;
-    let label = g.label;
-    while (ctx.measureText(label).width > maxLabelWidth && label.length > 4) {
-      label = label.slice(0, -2);
-    }
-    if (label !== g.label) label += '…';
-    ctx.fillText(label, lx + 18, y + 11);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '11px system-ui';
-    ctx.textAlign = 'right';
-    ctx.fillText(fmtPct((g.total / total) * 100), lx + 270, y + 11);
-    ctx.globalAlpha = 1;
-    ctx.textAlign = 'left';
-  });
-
-  // Wire up click hit-testing once per canvas instance
+  // Wire up canvas click (slice selection)
   if (!canvas.dataset.mfWired) {
     canvas.dataset.mfWired = '1';
     canvas.style.cursor = 'pointer';
-    canvas.title = 'Click a slice to filter Holdings by asset class';
     canvas.addEventListener('click', (e) => {
-      const slices = canvas.__mfSlices;
-      if (!slices || !slices.length) return;
+      const sl = canvas.__mfSlices;
+      if (!sl || !sl.length) return;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
       const x = (e.clientX - rect.left) * scaleX;
       const y = (e.clientY - rect.top) * scaleY;
-      const dx = x - 110, dy = y - 110;
+      const dx = x - cx, dy = y - cy;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > 95 || dist < 52) return; // outside the donut ring
-      // Convert atan2 result to match drawing convention (start at -π/2, sweep CW positive)
+      if (dist > r + 6 || dist < hole) return;
       let a = Math.atan2(dy, dx);
-      // Normalize to [-π/2, 3π/2) so it lines up with stored slice ranges
       while (a < -Math.PI / 2) a += 2 * Math.PI;
       while (a >= 3 * Math.PI / 2) a -= 2 * Math.PI;
-      const hit = slices.find(s => a >= s.start && a < s.end);
+      const hit = sl.find(s => a >= s.start && a < s.end);
       if (!hit) return;
-      // Toggle: clicking the active slice clears the filter
-      if (state.selectedAssetClass === hit.label) {
-        state.selectedAssetClass = null;
-      } else {
-        state.selectedAssetClass = hit.label;
-        // Jump to Holdings if we aren't already there
-        if (state.activeTab !== 'holdings') {
-          state.activeTab = 'holdings';
-          document.querySelectorAll('.mf-tab').forEach(b => {
-            b.classList.toggle('active', b.dataset.tab === 'holdings');
-          });
-        }
-      }
-      renderContent();
+      toggleAssetClass(hit.label);
     });
   }
   canvas.__mfSlices = slices;
+
+  // HTML legend — rendered into companion div
+  const legendEl = document.getElementById('mf-alloc-legend');
+  if (!legendEl) return;
+  legendEl.innerHTML = `
+    <div class="mf-alloc-legend-hdr">
+      <span>Asset</span><span>Value</span><span>Percent</span>
+    </div>
+    ${groups.map((g, i) => {
+      const pct = (g.total / total) * 100;
+      const isActive = highlightLabel === g.label;
+      return `<div class="mf-alloc-row${isActive ? ' active' : ''}" data-alloc-label="${escHtml(g.label)}">
+        <span class="mf-alloc-swatch" style="background:${colors[i % colors.length]}"></span>
+        <span class="mf-alloc-name">${escHtml(g.label)}</span>
+        <span class="mf-alloc-val">${fmt$(g.total)}</span>
+        <span class="mf-alloc-pct">${fmtPct(pct)}</span>
+      </div>`;
+    }).join('')}
+  `;
+  legendEl.querySelectorAll('.mf-alloc-row').forEach(row => {
+    row.addEventListener('click', () => toggleAssetClass(row.dataset.allocLabel));
+  });
+}
+
+function toggleAssetClass(label) {
+  if (state.selectedAssetClass === label) {
+    state.selectedAssetClass = null;
+  } else {
+    state.selectedAssetClass = label;
+    if (state.activeTab !== 'holdings') {
+      state.activeTab = 'holdings';
+      document.querySelectorAll('.mf-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === 'holdings');
+      });
+    }
+  }
+  renderContent();
+}
+
+// ── Overview "Value Over Time" chart ────────────────────────────────────────
+function getOverviewChartSeries() {
+  const dv = filteredDailyValues();
+  if (!dv.length) return [];
+  const period = state.overviewChartPeriod || 'ytd';
+  if (period === 'all') return dv;
+
+  const latest = parseDateLoose(dv[dv.length - 1].date);
+  if (!latest) return dv;
+
+  let cutoff;
+  if (period === '1y')  cutoff = new Date(latest.getFullYear() - 1, latest.getMonth(), latest.getDate());
+  else if (period === 'ytd') cutoff = new Date(latest.getFullYear(), 0, 1);
+  else if (period === '1m')  cutoff = new Date(latest.getFullYear(), latest.getMonth() - 1, latest.getDate());
+  else return dv;
+
+  const filtered = dv.filter(d => { const dt = parseDateLoose(d.date); return dt && dt >= cutoff; });
+  return filtered.length >= 2 ? filtered : dv;
+}
+
+function getOverviewChartStats(series, txns) {
+  if (!series || series.length < 2) return null;
+  const startValue = series[0].value;
+  const endValue = series[series.length - 1].value;
+  const startDate = parseDateLoose(series[0].date);
+  const endDate = parseDateLoose(series[series.length - 1].date);
+
+  let netCashFlow = 0;
+  const cashFlows = [];
+  for (const t of txns) {
+    if (!isCashFlow(t)) continue;
+    const td = parseDateLoose(t.date);
+    if (!td || !startDate || !endDate) continue;
+    if (td >= startDate && td <= endDate) {
+      netCashFlow += (t.amount || 0);
+      cashFlows.push({ date: t.date, amount: t.amount || 0 });
+    }
+  }
+
+  return {
+    startValue, endValue, netCashFlow,
+    investmentReturns: endValue - startValue - netCashFlow,
+    cashFlows,
+    startDate: series[0].date,
+    endDate: series[series.length - 1].date,
+  };
+}
+
+function renderVotStats(s) {
+  const el = document.getElementById('mf-vot-stats');
+  if (!el || !s) return;
+  el.innerHTML = `
+    <div class="mf-vot-stat">
+      <div class="mf-vot-stat-label">Starting Market Value</div>
+      <div class="mf-vot-stat-value">${fmt$(s.startValue)}</div>
+      <div class="mf-vot-stat-date">${fmtDate(s.startDate)}</div>
+    </div>
+    <div class="mf-vot-stat">
+      <div class="mf-vot-stat-label">Deposits &amp; Withdrawals</div>
+      <div class="mf-vot-stat-value ${s.netCashFlow >= 0 ? 'pos' : 'neg'}">${fmt$(s.netCashFlow)}</div>
+    </div>
+    <hr class="mf-vot-divider">
+    <div class="mf-vot-stat">
+      <div class="mf-vot-stat-label">Investment Returns</div>
+      <div class="mf-vot-stat-value ${s.investmentReturns >= 0 ? 'pos' : 'neg'}">${fmt$(s.investmentReturns)}</div>
+    </div>
+    <hr class="mf-vot-divider">
+    <div class="mf-vot-stat">
+      <div class="mf-vot-stat-label">Ending Market Value</div>
+      <div class="mf-vot-stat-value mf-vot-end-value">${fmt$(s.endValue)}</div>
+      <div class="mf-vot-stat-date">As of ${fmtDate(s.endDate)}</div>
+    </div>
+  `;
+}
+
+function initOverviewChart() {
+  drawOverviewChart();
+}
+
+function drawOverviewChart() {
+  const canvas = document.getElementById('mf-overview-chart');
+  if (!canvas) return;
+
+  const series = getOverviewChartSeries();
+  const txns = filteredTransactions();
+  const stats = getOverviewChartStats(series, txns);
+  renderVotStats(stats);
+
+  if (series.length < 2) {
+    setupCanvas(canvas, 220);
+    const ctx = canvas.getContext('2d');
+    const W = canvas.offsetWidth || 600;
+    drawChartBackground(ctx, W, 220);
+    ctx.fillStyle = '#475569';
+    ctx.font = '13px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Waiting for LPL Value Over Time data to load…', W / 2, 110);
+    return;
+  }
+
+  setupCanvas(canvas, 220);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth, H = 220;
+  const pad = { top: 20, right: 20, bottom: 44, left: 70 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  // Build cumulative-invested line: startValue + running sum of cash flows up to each date
+  const cfSorted = (stats?.cashFlows || [])
+    .map(cf => ({ dt: parseDateLoose(cf.date), amount: cf.amount }))
+    .filter(cf => cf.dt)
+    .sort((a, b) => a.dt - b.dt);
+
+  const investedLine = series.map(d => {
+    const dt = parseDateLoose(d.date);
+    let cum = series[0].value;
+    for (const cf of cfSorted) { if (cf.dt <= dt) cum += cf.amount; }
+    return cum;
+  });
+
+  const allValues = [...series.map(d => d.value), ...investedLine];
+  const minV = Math.min(...allValues), maxV = Math.max(...allValues);
+  const range = (maxV - minV) || 1;
+  const xOf = i => pad.left + (i / Math.max(1, series.length - 1)) * cw;
+  const yOf = v => pad.top + ch - ((v - minV) / range) * ch;
+
+  drawChartBackground(ctx, W, H);
+  drawGridY(ctx, pad, cw, ch, 4, (v) => fmtAxisDollar(minV + range * v));
+
+  // Filled area under portfolio value line
+  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+  grad.addColorStop(0, 'rgba(96,165,250,0.28)');
+  grad.addColorStop(1, 'rgba(96,165,250,0.02)');
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(series[0].value));
+  for (let i = 1; i < series.length; i++) ctx.lineTo(xOf(i), yOf(series[i].value));
+  ctx.lineTo(xOf(series.length - 1), pad.top + ch);
+  ctx.lineTo(xOf(0), pad.top + ch);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Orange dotted "time period investments" line
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(investedLine[0]));
+  for (let i = 1; i < investedLine.length; i++) ctx.lineTo(xOf(i), yOf(investedLine[i]));
+  ctx.strokeStyle = '#f97316';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Blue solid portfolio value line
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(series[0].value));
+  for (let i = 1; i < series.length; i++) ctx.lineTo(xOf(i), yOf(series[i].value));
+  ctx.strokeStyle = '#60a5fa';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // X-axis date labels (above cash-flow marker zone)
+  drawXAxisDates(ctx, series.map(d => d.date), xOf, H - 22);
+
+  // Cash flow $ markers — deduplicate by x pixel
+  const usedX = new Set();
+  for (const cf of cfSorted) {
+    let bestIdx = -1, bestDelta = Infinity;
+    for (let i = 0; i < series.length; i++) {
+      const sd = parseDateLoose(series[i].date);
+      if (!sd) continue;
+      const delta = Math.abs(sd - cf.dt);
+      if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+    }
+    if (bestIdx < 0 || bestDelta > 5 * 86400000) continue;
+    const x = Math.round(xOf(bestIdx));
+    if (usedX.has(x)) continue;
+    usedX.add(x);
+    const markerY = H - 10;
+    ctx.beginPath();
+    ctx.arc(x, markerY, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = '#1e3a5f';
+    ctx.fill();
+    ctx.strokeStyle = '#60a5fa';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#93c5fd';
+    ctx.font = 'bold 9px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('$', x, markerY + 3);
+  }
+
+  // Date range label (bottom-left, so period tab changes are visible even when data is the same)
+  if (series.length >= 2) {
+    ctx.fillStyle = '#475569';
+    ctx.font = '10px system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${fmtDateShort(series[0].date)} – ${fmtDateShort(series[series.length - 1].date)}`, pad.left, H - 4);
+  }
+
+  // Legend (top right of chart area)
+  const items = [
+    { color: '#60a5fa', dash: false, label: 'Value' },
+    { color: '#f97316', dash: true,  label: 'Time Period Investments' },
+  ];
+  ctx.font = '10px system-ui';
+  let lx = W - pad.right;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    const tw = ctx.measureText(item.label).width;
+    lx -= tw + 4;
+    ctx.fillStyle = '#94a3b8';
+    ctx.textAlign = 'left';
+    ctx.fillText(item.label, lx, pad.top + 10);
+    lx -= 20;
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = item.dash ? 1.5 : 2;
+    if (item.dash) ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(lx, pad.top + 6);
+    ctx.lineTo(lx + 14, pad.top + 6);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    lx -= 10;
+  }
+}
+
+function fmtAxisDollar(n) {
+  if (n == null || isNaN(n)) return '';
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+  if (abs >= 1e3) return '$' + Math.round(n / 1e3) + 'k';
+  return '$' + Math.round(n);
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────
