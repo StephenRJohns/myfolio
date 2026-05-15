@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.19';
+const MF_VERSION = 'v1.5.0';
 
 const state = {
   accounts: [],
@@ -24,6 +24,9 @@ const state = {
   txnPage: 1, txnPageSize: 10,
   txnSort: { col: 'date', dir: 'desc' },
   overviewChartPeriod: 'ytd',
+  overviewChartCustomStart: null,  // YYYY-MM-DD string when period === 'custom'
+  overviewChartCustomEnd: null,    // YYYY-MM-DD string when period === 'custom'
+  overviewChartCustomPickerOpen: false,
   overlayOpen: false,
   apiCallCount: 0,
   lastApiTime: null,
@@ -1010,8 +1013,43 @@ function buildOverlay() {
       if (periodBtn) {
         e.preventDefault();
         e.stopPropagation();
-        state.overviewChartPeriod = periodBtn.dataset.chartPeriod;
+        const id = periodBtn.dataset.chartPeriod;
+        if (id === 'custom') {
+          // CUSTOM toggles a date-picker popover. Selection isn't committed
+          // until the user clicks Apply.
+          state.overviewChartCustomPickerOpen = !state.overviewChartCustomPickerOpen;
+        } else {
+          state.overviewChartPeriod = id;
+          state.overviewChartCustomPickerOpen = false;
+        }
         renderContent();
+        return;
+      }
+
+      // Custom date picker — Apply / Cancel
+      if (e.target.closest('#mf-custom-apply')) {
+        e.preventDefault(); e.stopPropagation();
+        const s = document.getElementById('mf-custom-start')?.value || '';
+        const ed = document.getElementById('mf-custom-end')?.value || '';
+        if (s && ed && parseDateLoose(s) && parseDateLoose(ed) && parseDateLoose(ed) >= parseDateLoose(s)) {
+          state.overviewChartCustomStart = s;
+          state.overviewChartCustomEnd = ed;
+          state.overviewChartPeriod = 'custom';
+        }
+        state.overviewChartCustomPickerOpen = false;
+        renderContent();
+        return;
+      }
+      if (e.target.closest('#mf-custom-cancel')) {
+        e.preventDefault(); e.stopPropagation();
+        state.overviewChartCustomPickerOpen = false;
+        renderContent();
+        return;
+      }
+      // Clicking inside the date popover (but not on Apply/Cancel) shouldn't
+      // close it — the inputs themselves need to be interactive.
+      if (e.target.closest('#mf-chart-custom-popover')) {
+        e.stopPropagation();
         return;
       }
 
@@ -1733,20 +1771,21 @@ function renderOverview() {
   const p = state.overviewChartPeriod || 'ytd';
   const hasDailyData = dv.length >= 2;
 
-  // Determine how much history we have so we can show period tabs only when
-  // they'd actually produce a visible change. Brokerages typically deliver
-  // ~25 days at a time; without longer history, All/1Y/YTD/1M all render
-  // the same series, which feels like the buttons "do nothing."
-  let dataSpanDays = 0;
-  if (hasDailyData) {
-    const first = parseDateLoose(dv[0].date);
-    const last  = parseDateLoose(dv[dv.length - 1].date);
-    if (first && last) dataSpanDays = Math.round((last - first) / 86400000);
-  }
-  const showPeriodTabs = dataSpanDays > 31;  // need >1 month of data for periods to differ
-  const dateRangeLabel = hasDailyData
-    ? `${fmtDateShort(dv[0].date)} – ${fmtDateShort(dv[dv.length - 1].date)}`
-    : '';
+  // Compute the visible date range for the chart based on the selected period.
+  // This drives both the date-range label above the chart and (later) the
+  // chart's actual series filter.
+  const visibleSeries = hasDailyData ? getOverviewChartSeries() : [];
+  const dateRangeLabel = visibleSeries.length >= 2
+    ? `${fmtDateShort(visibleSeries[0].date)} – ${fmtDateShort(visibleSeries[visibleSeries.length - 1].date)}`
+    : (hasDailyData ? `${fmtDateShort(dv[0].date)} – ${fmtDateShort(dv[dv.length - 1].date)}` : '');
+  // Default dates for the CUSTOM picker — last year through the latest
+  // captured date — so the picker opens with reasonable initial values.
+  const customStart = state.overviewChartCustomStart || (hasDailyData
+    ? (() => { const d = parseDateLoose(dv[dv.length - 1].date); if (!d) return ''; const t = new Date(d.getFullYear() - 1, d.getMonth(), d.getDate()); return t.toISOString().slice(0, 10); })()
+    : '');
+  const customEnd = state.overviewChartCustomEnd || (hasDailyData
+    ? (parseDateLoose(dv[dv.length - 1].date) || new Date()).toISOString().slice(0, 10)
+    : '');
 
   // Flat-lined accounts (we don't have daily history for them and couldn't
   // find cash-flow transactions, so synthesis fell back to a constant equal
@@ -1795,12 +1834,26 @@ function renderOverview() {
           <div class="mf-vot-empty">Waiting for data…</div>
         </div>
         <div class="mf-vot-right">
-          ${showPeriodTabs ? `
+          ${hasDailyData ? `
           <div class="mf-chart-period-bar">
-            ${['all','1y','ytd','1m'].map(id => {
-              const labels = { all: 'All', '1y': '1 Year', ytd: 'YTD', '1m': '1 Month' };
+            ${['all','1y','ytd','1m','custom'].map(id => {
+              const labels = { all: 'All', '1y': '1 Year', ytd: 'YTD', '1m': '1 Month', custom: 'Custom' };
               return `<button class="mf-chart-period${p === id ? ' active' : ''}" data-chart-period="${id}">${labels[id]}</button>`;
             }).join('')}
+            ${state.overviewChartCustomPickerOpen ? `
+              <div class="mf-chart-custom-popover" id="mf-chart-custom-popover">
+                <div class="mf-chart-custom-row">
+                  <label>Start <input type="date" id="mf-custom-start" value="${escHtml(customStart)}"></label>
+                </div>
+                <div class="mf-chart-custom-row">
+                  <label>End <input type="date" id="mf-custom-end" value="${escHtml(customEnd)}"></label>
+                </div>
+                <div class="mf-chart-custom-actions">
+                  <button class="mf-chart-custom-btn" id="mf-custom-cancel">Cancel</button>
+                  <button class="mf-chart-custom-btn mf-chart-custom-btn-primary" id="mf-custom-apply">Apply</button>
+                </div>
+              </div>
+            ` : ''}
           </div>
           ` : ''}
           <canvas id="mf-overview-chart" style="width:100%;display:block;height:220px"></canvas>
@@ -2861,6 +2914,20 @@ function getOverviewChartSeries() {
   if (!dv.length) return [];
   const period = state.overviewChartPeriod || 'ytd';
   if (period === 'all') return dv;
+
+  // Custom: filter by user-picked start/end dates
+  if (period === 'custom') {
+    const s = parseDateLoose(state.overviewChartCustomStart);
+    const e = parseDateLoose(state.overviewChartCustomEnd);
+    if (!s || !e) return dv;
+    const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    const filtered = dv.filter(d => {
+      const dt = parseDateLoose(d.date);
+      return dt && dt >= startDay && dt <= endDay;
+    });
+    return filtered.length >= 2 ? filtered : dv;
+  }
 
   const latest = parseDateLoose(dv[dv.length - 1].date);
   if (!latest) return dv;

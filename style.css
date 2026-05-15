@@ -306,6 +306,7 @@
   gap: 0;
   border-bottom: 1px solid #293548;
   margin-bottom: 10px;
+  position: relative;  /* so the custom popover can position relative to the bar */
 }
 .mf-chart-period {
   background: transparent;
@@ -323,6 +324,72 @@
 }
 .mf-chart-period:hover { color: #94a3b8; }
 .mf-chart-period.active { color: #818cf8; border-bottom-color: #818cf8; font-weight: 600; }
+
+/* ── Custom date-range popover ──────────────────────────────────────────── */
+.mf-chart-custom-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+}
+.mf-chart-custom-row { display: flex; flex-direction: column; gap: 4px; }
+.mf-chart-custom-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+.mf-chart-custom-row input[type="date"] {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  padding: 6px 8px;
+  font: 12px system-ui;
+  color-scheme: dark;
+}
+.mf-chart-custom-row input[type="date"]:focus {
+  outline: none;
+  border-color: #818cf8;
+}
+.mf-chart-custom-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid #334155;
+}
+.mf-chart-custom-btn {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  font: 11px system-ui;
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mf-chart-custom-btn:hover { background: #243149; }
+.mf-chart-custom-btn-primary {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #fff;
+}
+.mf-chart-custom-btn-primary:hover { background: #4f46e5; }
 
 /* ── Account cards ───────────────────────────────────────────────────────── */
 .mf-account-grid {
