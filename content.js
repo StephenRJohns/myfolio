@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.15';
+const MF_VERSION = 'v1.4.16';
 
 const state = {
   accounts: [],
@@ -681,7 +681,25 @@ function synthesizeMissingAccountDailies() {
         rejected.push({ type: t.type, symbol: t.symbol, qty: t.quantity, amt: t.amount, reason: !td ? 'bad-date' : 'zero-impact' });
       }
     }
-    dbg('info', `Synthesis for ${acct.name} (${acct.id}): ${allAcctTxns.length} txns, ${acctTxns.length} classified as cash flows, ${cfList.length} with non-zero impact (total $${cfList.reduce((s,cf)=>s+cf.amount,0).toFixed(2)})`, { cfSample: cfList.slice(0, 5).map(cf => ({d: cf.date.toISOString().slice(0,10), a: cf.amount.toFixed(2)})), rejected: rejected.slice(0, 5) });
+    // Also gather samples of NON-classified txns so we can see what
+    // types are slipping through isCashFlow (e.g. share-transfer codes
+    // that don't match our regex).
+    const nonCf = allAcctTxns.filter(t => !isCashFlow(t));
+    const nonCfTypeCounts = {};
+    for (const t of nonCf) {
+      const k = String(t.type || '').trim() || '(empty)';
+      nonCfTypeCounts[k] = (nonCfTypeCounts[k] || 0) + 1;
+    }
+    const nonCfSample = nonCf.slice(0, 8).map(t => ({
+      type: t.type, symbol: t.symbol, qty: t.quantity, amt: t.amount,
+      desc: (t.description || '').slice(0, 40),
+    }));
+    dbg('info', `Synthesis for ${acct.name} (${acct.id}): ${allAcctTxns.length} txns, ${acctTxns.length} classified as cash flows, ${cfList.length} with non-zero impact (total $${cfList.reduce((s,cf)=>s+cf.amount,0).toFixed(2)})`, {
+      cfSample: cfList.slice(0, 5).map(cf => ({d: cf.date.toISOString().slice(0,10), a: cf.amount.toFixed(2)})),
+      rejected: rejected.slice(0, 5),
+      nonCfTypeCounts,
+      nonCfSample,
+    });
 
     const synth = [];
     for (const dateStr of dates) {
