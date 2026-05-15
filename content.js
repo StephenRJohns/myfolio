@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.8';
+const MF_VERSION = 'v1.4.9';
 
 const state = {
   accounts: [],
@@ -1972,7 +1972,75 @@ function saveSelectedBenchmarks(ids) {
   localStorage.setItem('myfolio_benchmarks', JSON.stringify(ids));
 }
 
-// ── Stooq benchmark fetcher (CSV, 24-hour cache) ────────────────────────────
+// ── Benchmark fetcher: Stooq first, Yahoo Finance fallback ──────────────────
+// Generic SW-port fetch — opens a port to background.js, sends one request,
+// resolves with { ok, text, finalUrl } or { ok:false, error }. Used for any
+// origin the content script can't fetch directly.
+async function fetchViaSW(url, timeoutMs = 25000) {
+  if (!extensionContextValid()) return { ok: false, error: 'Extension not loaded' };
+  return new Promise((resolve) => {
+    let settled = false;
+    let port;
+    const id = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+    const done = (r) => { if (!settled) { settled = true; resolve(r); try { port && port.disconnect(); } catch (e) {} } };
+    const watchdog = setTimeout(() => done({ ok: false, error: `No response within ${Math.round(timeoutMs/1000)}s` }), timeoutMs);
+    try {
+      port = chrome.runtime.connect({ name: 'mf-fetch' });
+      port.onMessage.addListener((m) => { if (m && m.id === id) { clearTimeout(watchdog); done(m); } });
+      port.onDisconnect.addListener(() => {
+        const lastErr = (() => { try { return chrome.runtime?.lastError; } catch (e) { return null; } })();
+        if (!settled) { clearTimeout(watchdog); done({ ok: false, error: `port disconnected${lastErr ? `: ${lastErr.message || lastErr}` : ''}` }); }
+      });
+      port.postMessage({ id, type: 'fetch', url });
+    } catch (e) {
+      clearTimeout(watchdog);
+      done({ ok: false, error: `connect failed: ${e.message || e}` });
+    }
+  });
+}
+
+// Try Stooq's CSV download endpoint. Returns parsed series, or null on failure.
+async function tryStooq(ticker, start, end) {
+  const key = ticker.toLowerCase();
+  const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const url = `https://stooq.com/q/d/l/?s=${key}.us&d1=${fmt(start)}&d2=${fmt(end)}&i=d`;
+  dbg('info', `Stooq: requesting ${ticker}`, { url });
+  const resp = await fetchViaSW(url);
+  if (!resp.ok) { dbg('warn', `Stooq failed for ${ticker}: ${resp.error}`); return null; }
+  const data = parseStooqCsv(resp.text);
+  if (!data.length) { dbg('warn', `Stooq returned empty/unparseable CSV for ${ticker}`); return null; }
+  dbg('ok', `Stooq: fetched ${data.length} bars for ${ticker}`);
+  return data;
+}
+
+// Try Yahoo Finance's v8 chart endpoint. Yahoo returns JSON with parallel
+// timestamp and close-price arrays. Free, no API key, generally CORS-friendly
+// from extension origins.
+async function tryYahoo(ticker, start, end) {
+  const p1 = Math.floor(start.getTime() / 1000);
+  const p2 = Math.floor(end.getTime() / 1000);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${p1}&period2=${p2}&interval=1d`;
+  dbg('info', `Yahoo: requesting ${ticker}`, { url });
+  const resp = await fetchViaSW(url);
+  if (!resp.ok) { dbg('warn', `Yahoo failed for ${ticker}: ${resp.error}`); return null; }
+  let json;
+  try { json = JSON.parse(resp.text); } catch (e) { dbg('warn', `Yahoo: bad JSON for ${ticker}`); return null; }
+  const result = json && json.chart && json.chart.result && json.chart.result[0];
+  if (!result || !Array.isArray(result.timestamp)) { dbg('warn', `Yahoo: missing timestamp array for ${ticker}`); return null; }
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  const data = [];
+  for (let i = 0; i < result.timestamp.length; i++) {
+    const t = result.timestamp[i];
+    const c = closes[i];
+    if (t != null && c != null) {
+      data.push({ date: new Date(t * 1000).toISOString().slice(0, 10), close: c });
+    }
+  }
+  if (!data.length) { dbg('warn', `Yahoo: no usable bars for ${ticker}`); return null; }
+  dbg('ok', `Yahoo: fetched ${data.length} bars for ${ticker}`);
+  return data;
+}
+
 async function loadBenchmarkSeries(ticker) {
   const key = ticker.toLowerCase();
   if (state.benchmarkSeries[key]) return state.benchmarkSeries[key];
@@ -1990,49 +2058,17 @@ async function loadBenchmarkSeries(ticker) {
 
     const end = new Date();
     const start = new Date(end.getTime() - 1825 * 86400000); // 5 years back
-    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const url = `https://stooq.com/q/d/l/?s=${key}.us&d1=${fmt(start)}&d2=${fmt(end)}&i=d`;
 
-    // Proxy through the service worker — MV3 content scripts use the host
-    // page's origin and Stooq doesn't allow CORS for accountview.lpl.com.
-    // Use a connect port (not sendMessage) so the worker stays alive while
-    // the fetch is in flight.
-    if (!extensionContextValid()) throw new Error('Extension not loaded');
-    dbg('info', `Stooq: requesting ${ticker} via service worker`, { url });
-    const resp = await new Promise((resolve) => {
-      let settled = false;
-      const id = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
-      const done = (r) => { if (!settled) { settled = true; resolve(r); try { port && port.disconnect(); } catch (e) {} } };
-      const watchdog = setTimeout(() => done({ ok: false, error: 'No response from service worker within 25s' }), 25000);
-      let port;
-      try {
-        port = chrome.runtime.connect({ name: 'mf-fetch' });
-        port.onMessage.addListener((m) => {
-          if (m && m.id === id) { clearTimeout(watchdog); done(m); }
-        });
-        port.onDisconnect.addListener(() => {
-          const lastErr = (() => { try { return chrome.runtime?.lastError; } catch (e) { return null; } })();
-          if (!settled) { clearTimeout(watchdog); done({ ok: false, error: `port disconnected${lastErr ? `: ${lastErr.message || lastErr}` : ''}` }); }
-        });
-        port.postMessage({ id, type: 'fetch', url });
-      } catch (e) {
-        clearTimeout(watchdog);
-        done({ ok: false, error: `connect failed: ${e.message || e}` });
-      }
-    });
-    if (!resp.ok) throw new Error(resp.error || 'fetch failed');
-    dbg('ok', `Stooq: service worker responded${resp.finalUrl && resp.finalUrl !== url ? ` (redirected to ${resp.finalUrl})` : ''}`);
-    const text = resp.text;
-    const data = parseStooqCsv(text);
-    if (!data.length) throw new Error('Empty or unparseable CSV');
+    let data = await tryStooq(ticker, start, end);
+    if (!data) data = await tryYahoo(ticker, start, end);
+    if (!data) throw new Error('Both Stooq and Yahoo Finance failed — see Debug log');
 
     state.benchmarkSeries[key] = data;
     safeStorageSet({ [`bm_${key}`]: { data, fetchedAt: Date.now() } });
-    dbg('ok', `Stooq: fetched ${data.length} bars for ${ticker}`);
     return data;
   } catch (err) {
     state.benchmarkErrors[key] = String(err.message || err);
-    dbg('warn', `Stooq fetch failed for ${ticker}`, { error: state.benchmarkErrors[key] });
+    dbg('warn', `Benchmark fetch failed for ${ticker}`, { error: state.benchmarkErrors[key] });
     return null;
   } finally {
     state.benchmarkLoading.delete(key);
