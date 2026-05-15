@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.18';
+const MF_VERSION = 'v1.4.19';
 
 const state = {
   accounts: [],
@@ -703,19 +703,25 @@ function synthesizeMissingAccountDailies() {
       nonCfSamplesByType,
     });
 
+    // Compare calendar DAYS, not datetimes. Daily values arrive as midnight-
+    // local timestamps but cash flows come tagged with UTC times (e.g.
+    // T07:00:00.000Z = 03:00 EDT). Naive Date > Date comparison would treat
+    // a same-day cash flow as "in the future" on its own day and subtract
+    // it from that day's value — producing a flat $0 series for accounts
+    // funded entirely on a single day.
+    const dayOf = (d) => d ? new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() : 0;
+    const cfDays = cfList.map(cf => ({ day: dayOf(cf.date), amount: cf.amount }));
     const synth = [];
     for (const dateStr of dates) {
       const dt = parseDateLoose(dateStr);
       if (!dt) continue;
+      const dtDay = dayOf(dt);
       let after = 0;
-      for (const cf of cfList) { if (cf.date > dt) after += cf.amount; }
+      for (const cf of cfDays) { if (cf.day > dtDay) after += cf.amount; }
       const v = acct.value - after;
       // Include zero-value entries — for a brand-new account whose entire
       // funding lands on one day, the pre-funding entries are correctly $0
       // (account didn't exist) and the post-funding entries carry the value.
-      // Skipping zeros would drop the series down to a single point, fail
-      // the length-check below, and leave the account out of the aggregate
-      // entirely — so the chart's ending total wouldn't match the KPI.
       if (v >= 0) synth.push({ date: dateStr, value: v });
     }
     if (synth.length >= 1) {
