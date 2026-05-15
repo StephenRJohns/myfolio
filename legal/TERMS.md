@@ -31,7 +31,7 @@ The Service is intended for **personal use** by an individual viewing their own 
 By installing or using the Service you represent that:
 
 - you are at least 18 years old and capable of forming a binding contract;
-- you are located in the United States;
+- the Service is intended for use in the United States; we make no representation that it is suitable for use in other jurisdictions, and your use of it elsewhere is at your own risk;
 - you are accessing only your own account, with your own valid credentials, in accordance with your agreement with your brokerage;
 - you understand that your relationship with your brokerage is governed by your agreement with them, and that your use of any browser extension on the brokerage's website is your responsibility;
 - you accept that the Service is provided as-is, with no warranty, no support, and no guarantee of accuracy.
@@ -40,14 +40,14 @@ By installing or using the Service you represent that:
 
 Your account is held by, your money is managed by, and your relationship is with your brokerage — **not us**. We have no visibility into your account, no ability to act on it, and no influence over your brokerage's terms of service. **You are solely responsible** for ensuring that your use of any browser extension (including this one) on your brokerage's website does not violate the brokerage's own terms. We make no representation that any particular brokerage permits browser extensions on its website. If you are uncertain, do not use the Service.
 
-If your brokerage notifies us that it objects to the Service, or if its terms of service appear to prohibit such tools, we will discontinue distribution of the Service.
+If your brokerage notifies us that it objects to the Service, or if its terms of service appear to prohibit such tools, we reserve the right to discontinue distribution of the Service.
 
 ## 4. Acceptable Use
 
 You agree NOT to use the Service to:
 
 - access any account that is not your own, or to which you do not have an explicit right of access;
-- circumvent any security control, rate limit, or terms imposed by any third party;
+- circumvent any security control, rate limit, or terms imposed by any third party, beyond actions inherent in the normal operation of the Service (which passively reads JSON responses your browser already receives);
 - use the Service in any manner that violates applicable law, including U.S. securities laws, privacy laws, or computer-misuse laws;
 - use the Service to scrape, archive, or extract data from any brokerage beyond the personal viewing of your own account;
 - represent the Service as endorsed by, affiliated with, or operated by LPL Financial LLC or any other brokerage.
@@ -93,7 +93,7 @@ See [DISCLAIMER.md § 3](DISCLAIMER.md) for an itemized list of disclaimed warra
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL JJJJJ ENTERPRISES, LLC OR ITS AFFILIATES, OFFICERS, EMPLOYEES, AGENTS, OR THE INDIVIDUAL DEVELOPER BE LIABLE TO YOU FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES — INCLUDING LOST PROFITS, LOST INVESTMENT GAINS, MISTIMED TRADES, TAX PENALTIES, WITHDRAWAL ERRORS, BENEFICIARY ERRORS, ESTATE ERRORS, LOST DATA, LOST GOODWILL, OR THIRD-PARTY CLAIMS — ARISING OUT OF OR IN CONNECTION WITH THESE TERMS OR YOUR USE OF (OR INABILITY TO USE) THE SERVICE, WHETHER UNDER CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, STATUTE, OR ANY OTHER LEGAL THEORY, EVEN IF JJJJJ ENTERPRISES, LLC OR THE INDIVIDUAL DEVELOPER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
 
-BECAUSE THE SERVICE IS PROVIDED FREE OF CHARGE, OUR MAXIMUM AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE SERVICE IS CAPPED AT **ZERO DOLLARS ($0.00)**. THIS LIMITATION REFLECTS THE BARGAIN: A FREE TOOL WITH NO LIABILITY.
+BECAUSE THE SERVICE IS PROVIDED FREE OF CHARGE, OUR MAXIMUM AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE SERVICE IS CAPPED AT THE GREATER OF **ZERO DOLLARS ($0.00)** OR ANY AMOUNTS ACTUALLY PAID BY YOU TO US FOR THE SERVICE (WHICH, UNDER THE CURRENT FREE DISTRIBUTION, ARE ZERO). THIS LIMITATION REFLECTS THE BARGAIN: A FREE TOOL WITH NO LIABILITY.
 
 Some jurisdictions do not allow the exclusion or limitation of certain damages. In those jurisdictions, the foregoing applies to the maximum extent permitted by law.
 
@@ -111,7 +111,11 @@ We may modify these Terms at any time. Updated Terms will be posted in this repo
 
 ## 13. Open-Source Components
 
-The Service does not bundle any third-party open-source code at present. If we add open-source components in a future release, attributions will be added to a `NOTICE` file in the repository.
+As of the effective date above, the Service does not bundle any third-party open-source code. If open-source components are added in a future release, attributions will be added to the `NOTICE` file in the repository.
+
+## 13.1 Informal Dispute Resolution
+
+Before initiating any legal proceeding arising out of or relating to these Terms or the Service, the parties agree to attempt to resolve the dispute informally by contacting legal@jjjjjenterprises.com with a written description of the claim. The parties shall negotiate in good faith for at least thirty (30) days before commencing any formal action.
 
 ## 14. Governing Law
 
@@ -119,7 +123,7 @@ These Terms are governed by the laws of the **State of Texas**, U.S.A., without 
 
 ## 15. Entire Agreement
 
-These Terms, together with the [Privacy Policy](PRIVACY.md), the [Disclaimer](DISCLAIMER.md), and the [LICENSE](../LICENSE), constitute the entire agreement between you and JJJJJ Enterprises, LLC regarding the Service.
+These Terms, together with the [Privacy Policy](PRIVACY.md), the [Disclaimer](DISCLAIMER.md), and the [LICENSE](../LICENSE), constitute the entire agreement between you and JJJJJ Enterprises, LLC regarding the Service. The Disclaimer is incorporated by reference. In the event of conflict among these documents, these Terms control.
 
 ## 16. Contact
 

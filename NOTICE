@@ -1,6 +1,8 @@
 MyFolio — Additional Notices
 ============================
 
+Last updated: 2026-05-15
+
 These notices accompany the MIT License (see LICENSE) but are not part of the
 MIT grant itself. They describe context that applies to the official MyFolio
 distribution by JJJJJ Enterprises, LLC and to fair-use references to
@@ -25,12 +27,28 @@ third-party trademarks.
    This software is a data-visualization tool. It is not investment advice.
    See legal/DISCLAIMER.md, legal/TERMS.md, and legal/PRIVACY.md for the full
    context that applies to the official distribution by JJJJJ Enterprises,
-   LLC. Forks that materially change behavior should publish their own.
+   LLC. Forks that materially change behavior are encouraged to publish
+   their own.
 
 4. Forks and derivative works
 
    The MIT License explicitly permits forking, modification, and
-   redistribution. The TERMS, PRIVACY, and DISCLAIMER documents in this
-   repository describe obligations between users and JJJJJ Enterprises, LLC
-   that arise from use of the official distribution; they do not bind
-   downstream forks, which are free to adopt their own user-facing terms.
+   redistribution. The legal/TERMS.md, legal/PRIVACY.md, and legal/DISCLAIMER.md
+   documents in this repository describe obligations between users and
+   JJJJJ Enterprises, LLC that arise from use of the official distribution;
+   they do not bind downstream forks, which are free to adopt their own
+   user-facing terms.
+
+5. Third-party data: Stooq
+
+   Benchmark price history is fetched from Stooq sp. z o.o. (stooq.com), a
+   third-party Polish stock-data service. The MyFolio author has no agreement
+   or relationship with Stooq. Use of Stooq is subject to Stooq's own terms
+   and privacy policy. See legal/DISCLAIMER.md § 6.2 and legal/PRIVACY.md § 5
+   for further detail.
+
+6. Third-party open-source components
+
+   As of the date above, MyFolio bundles no third-party open-source code. If
+   open-source components are added in a future release, attributions will be
+   appended to this NOTICE alongside the items above.

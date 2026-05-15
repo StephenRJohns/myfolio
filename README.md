@@ -4,7 +4,7 @@ A cleaner, modern dashboard overlay for your LPL AccountView retirement / broker
 
 > ## ⚠️ Important Notices — Read These First
 >
-> **Personal-use tool.** MyFolio was built by an individual developer who wanted a clearer view of their own account. It is shared freely in case others find it useful. There is no company behind it, no support team, no paid features, and no commitment to ongoing development.
+> **Personal-use tool.** MyFolio was built by an individual developer who wanted a clearer view of their own account. It is shared freely in case others find it useful. The publishing entity (JJJJJ Enterprises, LLC) exists only as a legal home for the project — there is no commercial operation behind it, no support team, no paid features, and no commitment to ongoing development.
 >
 > **No affiliation whatsoever.** JJJJJ Enterprises, LLC has **no business relationship of any kind** with LPL Financial LLC — no partnership, agreement, sponsorship, employment, or contract. LPL Financial LLC did not commission, review, approve, or endorse this tool. "LPL", "LPL Financial", and "AccountView" are trademarks of LPL Financial LLC, referenced solely to identify the website with which MyFolio is technically compatible (nominative fair use).
 >
@@ -23,7 +23,7 @@ A cleaner, modern dashboard overlay for your LPL AccountView retirement / broker
 - **Holdings** — sortable table of all positions with allocation %, gain/loss $ and %, and an allocation donut chart.
 - **Transactions** — recent activity in a clean, color-coded chronological table.
 - **Performance** — portfolio value over time, "Growth of $10,000" comparison vs. up to 10 selectable benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD), and a period-return table (YTD, 1Y, 3Y, 5Y).
-- **Hidden debug tab** — triple-tap Shift to reveal a network-call log. Useful for diagnosing unexpected behavior; a "⎘ Copy for Claude" button packages logs for pasting into an LLM.
+- **Debug tab** — triple-tap Shift to reveal a network-response log. Useful for diagnosing unexpected behavior; a "⎘ Copy debug log" button packages logs for pasting into a GitHub issue or any AI assistant.
 
 ## How It Works
 
@@ -80,7 +80,9 @@ MIT permits anyone to fork and modify MyFolio. The TERMS / PRIVACY / DISCLAIMER 
 
 ## Status
 
-MyFolio is a personal-use tool offered free of charge and as-is. There is no commitment to ongoing development, bug fixes, support, or compatibility maintenance. If the brokerage changes its website in a way that breaks MyFolio, MyFolio may simply stop working. If LPL Financial LLC asks us to discontinue the tool, we will.
+MyFolio is a personal-use tool offered free of charge and as-is. There is no commitment to ongoing development, bug fixes, support, or compatibility maintenance. If the brokerage changes its website in a way that breaks MyFolio, MyFolio may simply stop working. If LPL Financial LLC objects to the tool, we reserve the right to discontinue distribution.
+
+This project is governed by Texas law; see [Terms § 14](legal/TERMS.md) for the full dispute-resolution provisions.
 
 ## Contributing
 
@@ -88,7 +90,7 @@ Pull requests are welcome but not guaranteed to be reviewed or merged. Bug repor
 
 1. What you expected to see
 2. What you actually saw (a screenshot helps)
-3. The contents of the Debug tab (triple-tap Shift → "⎘ Copy for Claude")
+3. The contents of the Debug tab (triple-tap Shift → "⎘ Copy debug log")
 
 ## Support (Best-Effort Only)
 

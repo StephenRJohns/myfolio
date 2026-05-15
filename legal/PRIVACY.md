@@ -58,7 +58,7 @@ The Service **does not collect, transmit, store on any external server, log, ana
 - **Usage statistics** — how often you open MyFolio, which tabs you view, how long you spend, which features you use
 - **Click-through events**, scroll behavior, mouse movements, or keystroke patterns
 - **Error reports**, crash logs, exception stack traces, or any debug telemetry
-- **Performance metrics** — page load times, render times, network timings
+- **Performance metrics** — render times, network timings, or any performance telemetry transmitted to any server (load-time samples are stored locally only, for the on-screen ETA — see Section 4)
 - **Cookies** of any kind (the extension sets no cookies)
 - **Web beacons**, tracking pixels, or pixel tags
 - **Local storage tracking identifiers** or other persistent device markers
@@ -115,8 +115,10 @@ Where `{ticker}` is a benchmark ETF symbol like `spy` or `vti`, and `{start}`/`{
 
 This request:
 - **Sends only**: the benchmark ticker symbol and a date range — nothing else
-- **Sends nothing about you**: not your name, not your account, not your IP (beyond what any HTTP request sends), not your portfolio, nothing
+- **Sends nothing about you in the request body or URL**: not your name, not your account, not your portfolio
 - **Receives**: a CSV file of daily closing prices for that public ETF, identical to what any visitor to stooq.com sees
+
+**About your IP address.** As with any HTTP request to any website, Stooq's server will receive your IP address as the network source of the request. This is inherent to internet communication and is not something the extension transmits intentionally. We do not control what Stooq logs or retains about that IP; their practices are governed by their own privacy policy. If you wish to avoid this disclosure, do not select any benchmarks on the Performance tab — the Stooq request only fires when at least one benchmark is selected.
 - **Is cached**: not made more than once every 24 hours per ticker
 - **Is optional**: only happens when the Performance tab is open and benchmarks are selected
 
@@ -152,9 +154,9 @@ If you reside in another U.S. state with a comprehensive privacy law (Virginia, 
 
 For privacy questions, contact: **legal@jjjjjenterprises.com**
 
-## 11. Children
+## 11. Children and Minors
 
-The Service is not directed to children under 13. We do not knowingly process any data from children.
+The Service is not directed to or intended for use by persons under 18. The Terms of Service require users to be at least 18 years old. We do not knowingly process any data from minors. If you become aware that a person under 18 has installed or used the Service, please notify us so we can take appropriate action.
 
 ## 12. Data Security
 
@@ -162,7 +164,7 @@ Because the Service stores no personal data on any system we control, there is n
 
 ## 13. Changes to This Policy
 
-We may update this Privacy Policy. The "Effective date" at the top reflects the latest revision, and material changes will be reflected in the extension's release notes on GitHub.
+We may update this Privacy Policy. The "Effective date" at the top reflects the latest revision, and material changes will be noted in the repository's commit history and changelog on GitHub.
 
 ## 14. Contact
 

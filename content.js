@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.3.1';
+const MF_VERSION = 'v1.4.0';
 
 const state = {
   accounts: [],
@@ -48,9 +48,18 @@ function dbg(level, msg, detail) {
 
 // Load persisted data from storage on startup
 const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
-chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues'], (result) => {
+const CACHE_SCHEMA_VERSION = 2;  // bump to invalidate older cached series
+chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
   if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
+
+  // Invalidate cached series written by a prior schema (e.g. before the v>0 filter)
+  if (result.cacheSchemaVersion !== CACHE_SCHEMA_VERSION) {
+    chrome.storage.local.remove(['cachedDailyValues', 'cachedAccountDailyValues']);
+    chrome.storage.local.set({ cacheSchemaVersion: CACHE_SCHEMA_VERSION });
+    dbg('info', 'Daily-value cache cleared (schema upgrade)');
+    return;
+  }
 
   // Restore cached daily values (expire after 24h so stale data doesn't linger)
   const dv = result.cachedDailyValues;
@@ -65,7 +74,9 @@ chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyV
   }
 });
 
-// Proactively re-fetch the account-vot endpoint using saved request details.
+// Proactively re-fetch the value-over-time data using saved request details.
+// This replays the same request the browser already made, using the browser's
+// own session cookie. The request is identical to one the page initiated.
 // Runs when we have account data but no daily value history yet.
 async function proactiveFetchVot() {
   if (state.dailyValues.length >= 2) return;
@@ -292,8 +303,9 @@ function parseApiResponse(url, data) {
           acctSeries.sort((a, b) => a.date.localeCompare(b.date));
           perAcct[acctId] = acctSeries;
         }
-        // Patch returns onto the matching state.accounts entry (account-vot's
-        // PeriodTotalReturn = YTD per LPL's chart query default)
+        // Patch returns onto the matching state.accounts entry.
+        // PeriodTotalReturn in this payload represents the period's total return
+        // (typically YTD when the request uses the default date window).
         if (acctId) {
           const accIdx = state.accounts.findIndex(x => x.id === acctId);
           if (accIdx >= 0) {
@@ -385,7 +397,7 @@ function flattenPerf(data) {
 }
 
 // Backfill missing per-account values from the daily-value series captured
-// by account-vot. Runs from both endpoints so it works regardless of arrival
+// by the value-over-time payload. Runs from both response handlers so it works regardless of arrival
 // order (accountinfo before account-vot, or the reverse).
 function backfillAccountValues() {
   if (!state.accounts.length || !state.accountDailyValues) return;
@@ -401,9 +413,9 @@ function backfillAccountValues() {
   if (patched) dbg('ok', `Backfilled value for ${patched} account${patched > 1 ? 's' : ''} from account-vot daily values`);
 }
 
-// ── Brokerage-specific normalizers (field names from awsp.myaccountviewonline.com) ─
+// ── Brokerage-specific normalizers (observed response field names) ─
 const ACCOUNT_VALUE_FIELDS = [
-  // LPL-specific fields seen in the wild (highest priority first)
+  // Explicit account-total field observed in production responses (highest priority)
   'totalAccountValue',
   // Common explicit names
   'marketValue', 'totalValue', 'accountValue', 'balance',
@@ -472,7 +484,7 @@ function normalizeBrokerageAccount(a) {
         dump[k] = v;
       }
     }
-    dbg('warn', `Account value NOT detected for "${a.accountName || a.nickName || id}" — paste this in your bug report`, dump);
+    dbg('warn', `Account value NOT detected for "${a.accountName || a.nickName || id}" — copy this from the Debug tab and open a GitHub issue`, dump);
   }
   return {
     id,
@@ -801,7 +813,7 @@ function updateStatusBar() {
     const etaMs = avg - elapsedMs;
     const etaS = Math.max(0, Math.round(etaMs / 1000));
     const pct = Math.min(100, Math.round((elapsedMs / avg) * 100));
-    const callNote = state.apiCallCount ? ` · ${state.apiCallCount} API calls seen` : '';
+    const callNote = state.apiCallCount ? ` · ${state.apiCallCount} responses observed` : '';
     el.textContent = etaS > 0
       ? `Loading… ${elapsedS}s elapsed · avg ${fmtSec(avg)} · ~${fmtSec(etaMs)} remaining${callNote}`
       : `Almost there… ${elapsedS}s elapsed (avg ${fmtSec(avg)})${callNote}`;
@@ -809,7 +821,7 @@ function updateStatusBar() {
     setProgressWidth(pct);
   } else {
     // No history yet
-    const callNote = state.apiCallCount ? `${state.apiCallCount} API calls captured, parsing…` : 'Listening for data…';
+    const callNote = state.apiCallCount ? `${state.apiCallCount} responses received, parsing…` : 'Listening for data…';
     el.textContent = elapsedS > 8
       ? `${elapsedS}s — ${callNote} (first session, no ETA yet)`
       : callNote;
@@ -1032,93 +1044,132 @@ const HELP_CONTENT = {
   overview: {
     title: 'Overview tab',
     body: `
-      <p>The Overview is your starting point. It summarizes your whole portfolio (or one drilled-into account) and lets you slice your data with one click.</p>
+      <p>The Overview is your starting point. It summarizes your whole portfolio (or a single account you have drilled into) and lets you slice your data with one click.</p>
       <h4>What each KPI shows</h4>
       <ul>
-        <li><strong>Total Portfolio Value</strong> — current market value plus today's $ and % change.</li>
-        <li><strong>MTD / YTD / 1-Year Return</strong> — period returns computed with the <em>Modified Dietz</em> formula, which adjusts for deposits, withdrawals, and transfers during the period. LPL's own per-account YTD (true time-weighted return) is preferred when available. A frame only appears when enough history is captured to compute it.</li>
-        <li><strong>Positions</strong> — number of holdings visible after the current filter.</li>
+        <li><strong>Total Portfolio Value</strong> — current market value plus today's $ and % change. Switches to <em>Account Value</em> when a single account is selected.</li>
+        <li><strong>MTD / YTD / 1-Year Return</strong> — period returns computed with the <em>Modified Dietz</em> formula, which adjusts for deposits, withdrawals, and transfers during the period. The brokerage's own YTD (true time-weighted return) is preferred when available. A value only appears when enough history has been captured; otherwise the card shows —.</li>
+        <li><strong>Positions</strong> — number of holdings visible after the current filter. <strong>Click this card</strong> to jump to the Holdings tab.</li>
+      </ul>
+      <h4>Value Over Time panel</h4>
+      <ul>
+        <li>The stats panel to the left of the chart shows, for the selected period:
+          <ul>
+            <li><strong>Starting Market Value</strong> — portfolio value at the start of the period.</li>
+            <li><strong>Deposits &amp; Withdrawals</strong> — net external cash flows during the period.</li>
+            <li><strong>Investment Returns</strong> — gain or loss attributable to market performance (ending − starting − net cash flows).</li>
+            <li><strong>Ending Market Value</strong> — most recent captured portfolio value.</li>
+          </ul>
+        </li>
+        <li>Use the <strong>All / 1 Year / YTD / 1 Month</strong> buttons above the chart to change the time window. The stats panel updates to match. A date-range label at the bottom-left of the chart confirms what's shown.</li>
+        <li>The blue line is your portfolio value; the orange dotted line is cumulative invested capital. <strong>$</strong> markers indicate captured cash-flow dates.</li>
       </ul>
       <h4>Account cards</h4>
       <ul>
         <li><strong>Click any account card</strong> to filter the entire dashboard (Overview, Holdings, Transactions, Performance) to just that account.</li>
-        <li>The <strong>Total Portfolio</strong> card acts as a reset — clicking it clears every active filter.</li>
-        <li>Accounts with $0 balance and no activity (e.g. closed/transfer-only accounts) are hidden automatically. The status bar shows an asterisk + footnote indicating how many are hidden.</li>
+        <li>While filtered to a single account, an "← All Accounts" chip returns you to the full portfolio view. Click the × on any active filter chip to clear it individually.</li>
+        <li>Accounts with $0 balance and no activity (closed or transfer-only) are hidden automatically. The status bar shows a footnote indicating how many are hidden.</li>
       </ul>
       <h4>Allocation donut</h4>
       <ul>
-        <li>Slices are grouped strictly by <strong>asset class</strong>.</li>
-        <li><strong>Click a slice</strong> to filter the Holdings tab to that class and jump there. Click the same slice again to clear.</li>
+        <li>Slices are grouped by asset class, using the broker's classification when available.</li>
+        <li><strong>Click any slice — or any row of the legend table</strong> — to filter the Holdings tab to that class and jump there. Click the same item again to clear.</li>
+        <li>An identical donut also appears at the top of the Holdings tab; on that tab, clicking a slice/row filters in place without switching tabs.</li>
       </ul>
     `,
   },
   holdings: {
     title: 'Holdings tab',
     body: `
-      <p>Every position you currently hold, with allocation %, unrealized gain/loss, and a donut chart of category weights.</p>
+      <p>Every position you currently hold. The page leads with the same allocation donut as the Overview, then a sortable table.</p>
+      <h4>Columns</h4>
+      <ul>
+        <li><strong>Symbol</strong>, <strong>Name</strong> — security identifier and full description.</li>
+        <li><strong>Qty</strong>, <strong>Price</strong> — current share count and last reported price.</li>
+        <li><strong>Value</strong> — quantity × price (market value).</li>
+        <li><strong>Alloc</strong> — this position's share of total portfolio value (or the filtered subtotal).</li>
+        <li><strong>G/L</strong> &amp; <strong>G/L %</strong> — <em>unrealized</em> gain or loss vs. cost basis as reported by the broker. Realized gains from sales are not included here — see the Transactions tab.</li>
+      </ul>
       <h4>Working with the table</h4>
       <ul>
         <li><strong>Click any column header</strong> to sort by that column. Click the same header again to flip ascending ↔ descending. ▲ / ▼ shows the active sort direction.</li>
-        <li><strong>Click any row</strong> to drill into that symbol — you'll jump to the Transactions tab filtered to that ticker.</li>
-        <li>Use the <strong>page-size dropdown</strong> at the top of the table to control how many rows show at once. Page through with ⏮ ◀ ▶ ⏭. Buttons disable at the first and last page.</li>
+        <li><strong>Click any row</strong> to drill into that symbol — you'll jump to the Transactions tab filtered to that ticker. The symbol filter shows as a removable chip you can clear later.</li>
+        <li>Use the <strong>page-size dropdown</strong> at the top of the table to control how many rows show at once (10, 25, 50, 100, or All). Page through with ⏮ ◀ ▶ ⏭. Buttons disable at the first and last page.</li>
       </ul>
-      <h4>Filters</h4>
+      <h4>Filters &amp; donut</h4>
       <ul>
-        <li>Active filters (account, asset class, symbol) show as chips at the top. Click any × to clear one independently.</li>
-        <li>The donut still shows the full account context even when an asset-class filter is active, so you don't lose your bearings.</li>
+        <li>Active filters (account, asset class, symbol) show as chips at the top. Click the × on any chip to clear it independently.</li>
+        <li>The donut still reflects the current account context even when an asset-class filter is active, so you don't lose your bearings.</li>
+        <li>The table footer always totals 100% of the visible rows.</li>
       </ul>
     `,
   },
   transactions: {
     title: 'Transactions tab',
     body: `
-      <p>Every captured activity — buys, sells, dividends, deposits, withdrawals, fees, journal entries.</p>
+      <p>Every captured activity — buys, sells, dividends, deposits, withdrawals, fees, and journal entries (internal transfers between accounts).</p>
       <h4>Reading the rows</h4>
       <ul>
-        <li><strong>Type</strong> is the brokerage's transaction code; the small colored badge marks it for quick scanning.</li>
-        <li><strong>Amount</strong> sign convention: positive = money into the account (deposit, sell proceeds, dividend), negative = money out (buy, withdrawal, fee).</li>
+        <li><strong>Date</strong> — trade or activity date as reported by the broker.</li>
+        <li><strong>Type</strong> — the broker's transaction code (e.g. BUY, SELL, DIV for dividend, DEP for deposit, WD for withdrawal, FEE, JNL for journal). The small colored badge groups codes for quick scanning.</li>
+        <li><strong>Symbol</strong> and <strong>Description</strong> — the security involved and a human-readable detail (e.g. fund name, dividend kind).</li>
+        <li><strong>Qty</strong>, <strong>Price</strong> — share count and per-share price for trades.</li>
+        <li><strong>Amount</strong> — always shown as a positive number, color-coded by direction:
+          <ul>
+            <li><span style="color:#4ade80">green</span> = money <em>into</em> the account (deposit, sell proceeds, dividend).</li>
+            <li><span style="color:#f87171">red</span> = money <em>out</em> of the account (buy, withdrawal, fee).</li>
+          </ul>
+        </li>
       </ul>
-      <h4>Sorting & paging</h4>
+      <h4>Sorting &amp; paging</h4>
       <ul>
-        <li>Every column is sortable. Default sort is by date descending (most recent first).</li>
-        <li>Page-size and navigation controls work just like the Holdings tab.</li>
+        <li>Every column is sortable. Default sort is by date descending (most recent first). The sort state persists across tab switches within the session.</li>
+        <li>Page-size and navigation controls work just like the Holdings tab (10, 25, 50, 100, or All).</li>
       </ul>
       <h4>Drilling in</h4>
       <ul>
-        <li>You can land here filtered to a single symbol by clicking a row on the Holdings tab, or filtered to a single account by clicking an account card on Overview. Active filters are removable chips at the top.</li>
+        <li>You can land here filtered to a single symbol by clicking a row on the Holdings tab, or filtered to a single account by clicking an account card on Overview.</li>
+        <li>Active filters appear as chips at the top. Click the × on any chip to clear it independently. There is no built-in date-range filter.</li>
       </ul>
     `,
   },
   performance: {
     title: 'Performance tab',
     body: `
-      <p>Long-form return analysis. Use this to answer "how have I actually done" beyond today's change.</p>
+      <p>Detailed return analysis. Use this to answer "how have I actually done" beyond today's change.</p>
+      <h4>Getting data to load</h4>
+      <ul>
+        <li>Charts populate from the same daily-value data the Overview's Value Over Time panel uses — your brokerage delivers it automatically when the Overview page is open. Spending a few seconds on the brokerage's Overview before clicking <strong>◆ MyFolio View</strong> ensures the data is captured.</li>
+        <li>The Growth of $10,000 chart additionally requires at least one benchmark to be selected below.</li>
+      </ul>
       <h4>What's shown</h4>
       <ul>
-        <li><strong>Portfolio Value Over Time</strong> — your daily portfolio value as captured from LPL.</li>
+        <li><strong>Portfolio Value Over Time</strong> — your full captured daily-value history, in dollars. Unlike the Overview's chart, this one is not period-filtered.</li>
         <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. This is the apples-to-apples comparison view.</li>
-        <li><strong>Period Returns table</strong> — YTD, 1-Year, 3-Year, 5-Year. Your portfolio appears in the highlighted row; benchmarks below it.</li>
+        <li><strong>Period Returns table</strong> — YTD, 1-Year, 3-Year, 5-Year. Your portfolio appears in the highlighted row; benchmarks below it. 3-Year and 5-Year for your portfolio show — unless you have that much daily-value history captured; benchmarks can show them immediately because Stooq returns up to 5 years of price history.</li>
       </ul>
-      <h4>Benchmarks</h4>
+      <h4>Compare Against (benchmark picker)</h4>
       <ul>
-        <li>Pick from 10 ETFs covering broad equity, international, bonds, real estate, and gold. Selections persist across sessions.</li>
+        <li>Ten ETF benchmarks shown as toggleable chips — broad equity, international, bonds, real estate, and gold. Check any combination.</li>
+        <li>Defaults to SPY (S&amp;P 500), VTI (US Total Market), and AGG (US Bonds). Selecting a new benchmark immediately triggers a price-history fetch.</li>
+        <li>Selections persist across sessions.</li>
         <li>Price data is fetched from <code>stooq.com</code> and cached for 24 hours. The only thing sent is the ticker symbol and date range — no personal data.</li>
-        <li>Benchmark returns are computed from price change only (no dividend reinvestment), so for SPY/VTI they will read slightly lower than total-return figures you'd see on Morningstar. For informational purposes only.</li>
+        <li>Benchmark returns are computed from price change only (no dividend reinvestment), so SPY/VTI will read slightly lower than the total-return figures you'd see on Morningstar. For informational purposes only.</li>
       </ul>
       <h4>About the math</h4>
       <ul>
-        <li>Your portfolio returns are computed from LPL's daily-value series. For periods with large deposits/withdrawals, MyFolio uses Modified Dietz on the Overview KPIs; the Performance tab uses simple period delta as a faster approximation. Always cross-check against your official statements before acting.</li>
+        <li>Overview KPIs use the <em>Modified Dietz</em> formula to adjust for deposits/withdrawals. The Period Returns table on this tab uses simple percentage change from the start to the end of the period as a faster approximation. Always cross-check against your official statements before acting.</li>
       </ul>
     `,
   },
   debug: {
     title: 'Debug tab',
     body: `
-      <p>The hidden debug tab — reachable by triple-tapping <kbd>Shift</kbd> — shows every API call MyFolio has seen, in order, with full JSON detail when available.</p>
+      <p>The debug tab — reachable by triple-tapping <kbd>Shift</kbd> — shows every response MyFolio has observed, in order, with full JSON detail when available.</p>
       <h4>When to use it</h4>
       <ul>
         <li>Something looks wrong (a missing value, a misclassified asset, an account that didn't appear).</li>
-        <li>You want to file a bug or request a fix. Click <strong>⎘ Copy for Claude</strong> to package the log for pasting into a chat or GitHub issue.</li>
+        <li>You want to file a bug or request a fix. Click <strong>⎘ Copy debug log</strong> to package the log for pasting into a GitHub issue or any AI assistant.</li>
         <li>Click <strong>↺ Reload page</strong> to re-trigger the LPL API calls and capture fresh data.</li>
       </ul>
       <h4>What you'll see</h4>
@@ -1764,7 +1815,7 @@ function renderPerformance() {
       </div>
 
       ${!hasPortfolioHistory ? `
-        <p class="mf-note">No historical portfolio data captured yet. Open your brokerage's performance page (My Accounts → Performance) so MyFolio can capture the daily value history needed for charts.</p>
+        <p class="mf-note">No historical portfolio data captured yet. Open the Overview or Performance section of your account so MyFolio can read the daily value history needed for charts.</p>
       ` : ''}
 
       <p class="mf-note">Benchmark price data is fetched from public sources (stooq.com) and cached for 24 hours. Returns are calculated from total price change and do not include dividend reinvestment. For informational purposes only — not investment advice.</p>
@@ -2023,13 +2074,13 @@ function renderDebugTab() {
       <div class="mf-debug-header">
         <h3 class="mf-section-title" style="margin:0">Debug Log <span class="mf-badge">${state.logs.length}</span></h3>
         <div class="mf-debug-summary">
-          <span>API calls intercepted: <strong>${state.apiCallCount}</strong></span>
+          <span>Responses observed: <strong>${state.apiCallCount}</strong></span>
           <span>Accounts: <strong>${state.accounts.length}</strong></span>
           <span>Positions: <strong>${state.positions.length}</strong></span>
           <span>Transactions: <strong>${state.transactions.length}</strong></span>
         </div>
         <button class="mf-reload-btn" onclick="location.reload()">↺ Reload page</button>
-        <button class="mf-reload-btn" id="mf-copy-log">⎘ Copy for Claude</button>
+        <button class="mf-reload-btn" id="mf-copy-log">⎘ Copy debug log</button>
         <button class="mf-reload-btn" id="mf-clear-log">✕ Clear</button>
       </div>
       <div class="mf-debug-log" id="mf-debug-log">
@@ -2056,7 +2107,7 @@ function renderDebugTab() {
     const text = buildCopyPayload();
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('mf-copy-log');
-      if (btn) { btn.textContent = '✔ Copied!'; setTimeout(() => { btn.textContent = '⎘ Copy for Claude'; }, 2000); }
+      if (btn) { btn.textContent = '✔ Copied!'; setTimeout(() => { btn.textContent = '⎘ Copy debug log'; }, 2000); }
     });
   });
 }
@@ -2066,7 +2117,7 @@ function buildCopyPayload() {
   lines.push('=== MyFolio Debug Report ===');
   lines.push(`Page URL: ${location.href}`);
   lines.push(`Time: ${new Date().toISOString()}`);
-  lines.push(`API calls intercepted: ${state.apiCallCount}`);
+  lines.push(`Responses observed: ${state.apiCallCount}`);
   lines.push(`Accounts parsed: ${state.accounts.length}`);
   lines.push(`Positions parsed: ${state.positions.length}`);
   lines.push(`Transactions parsed: ${state.transactions.length}`);
@@ -2093,12 +2144,25 @@ function escHtml(s) {
 
 // ── Allocation donut chart (pure canvas, no dependencies) ───────────────────
 function classifyPosition(p) {
-  // Use the LPL asset-class field if present; otherwise infer from symbol/name
-  if (p.assetClass) return p.assetClass;
+  // Prefer broker-supplied class fields; fall back to symbol/name inference.
+  const broker = p.assetClass || p.broadAssetClass || p.assetCategory ||
+                 p.investmentType || p.securityType || p.category || '';
+  if (broker) return broker;
   const text = `${p.symbol || ''} ${p.name || ''}`.toUpperCase();
-  if (/CASH|MONEY MKT|MONEY MARKET|MMKT|FDIC|SWEEP/.test(text)) return 'Cash and Cash Equivalents';
-  if (/\bETF\b|\bFUND\b|TRUST|ISHARES|VANGUARD|SPDR/.test(text)) return 'Mutual Funds, ETPs, and CIs';
-  if (/BOND|NOTE|TREASUR|BILL|GOV/.test(text)) return 'Fixed Income';
+  // Cash & equivalents
+  if (/CASH|MONEY MKT|MONEY MARKET|MMKT|FDIC|SWEEP|FUNDS DEPOSITED/.test(text)) return 'Cash';
+  // Fixed income
+  if (/\bBOND\b|\bNOTE\b|TREASUR|\bBILL\b|MUNI|GOVT|GOVERNMENT|AGGREGATE|TIP[S]?\b|TLT|AGG/.test(text)) return 'Bonds';
+  // International equity
+  if (/INTERNATIONAL|FOREIGN|EUROPE|PACIFIC|EMERGING|GLOBAL EX|EX[- ]US|VXUS|EFA|VEU|IEFA|VWO|EEM/.test(text)) return 'Non-US Stocks';
+  // Real estate
+  if (/REAL ESTATE|REIT|VNQ|IYR|RWR/.test(text)) return 'Real Estate';
+  // Commodities / gold
+  if (/GOLD|GLD|IAU|COMMODIT|SILVER|SLV/.test(text)) return 'Commodities';
+  // Balanced / target-date / lifecycle
+  if (/BALANCED|TARGET|LIFECYCLE|RETIREMENT 20|ALL ASSET|MULTI-ASSET|ALLOCATION FUND/.test(text)) return 'Balanced';
+  // US equity (broad funds + visible US tickers)
+  if (/S&P|SPDR|VANGUARD|ISHARES|FIDELITY|SCHWAB|RUSSELL|TOTAL STOCK|TOTAL MARKET|GROWTH|VALUE|LARGE CAP|MID CAP|SMALL CAP|\bETF\b|\bFUND\b/.test(text)) return 'US Stocks';
   return 'Uncategorized';
 }
 

@@ -45,7 +45,7 @@ The data parsing in MyFolio depends on field names observed in the brokerage's w
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, NEITHER JJJJJ ENTERPRISES, LLC NOR THE INDIVIDUAL DEVELOPER WILL BE LIABLE TO YOU OR TO ANY THIRD PARTY FOR ANY:
 
-- **direct damages** (we have a $0 connection to your account);
+- **direct damages**;
 - **indirect, incidental, special, consequential, punitive, or exemplary damages**;
 - **lost profits, lost investment gains, missed investment opportunities, mistimed trades, or imputed financial losses**;
 - **tax penalties, late-filing penalties, IRS penalties, or any tax-related cost** arising from incorrect figures shown in MyFolio;
@@ -99,7 +99,7 @@ MyFolio is a personal-use tool offered free of charge. We make no commitment to:
 - respond to support requests;
 - continue distribution.
 
-The tool may be discontinued at any time without notice. If we are notified by the brokerage that it objects to extension-based reformatting of its website, or if the brokerage's terms of service appear to prohibit such tools, we will discontinue distribution.
+The tool may be discontinued at any time without notice. If we are notified by the brokerage that it objects to extension-based reformatting of its website, or if the brokerage's terms of service appear to prohibit such tools, we reserve the right to discontinue distribution.
 
 ## 8. Third-Party Trademarks
 
@@ -108,29 +108,31 @@ JJJJJ Enterprises, LLC is not affiliated with, sponsored by, or endorsed by any 
 | Mark | Owner |
 |---|---|
 | LPL Financial, LPL, AccountView | LPL Financial LLC |
-| Google, Chrome, Chrome Web Store, Chrome | Google LLC |
+| Google, Chrome, Chrome Web Store | Google LLC |
 | Stooq | Stooq sp. z o.o. |
-| ETF tickers (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD, etc.) | Issuing fund companies (State Street, Vanguard, Invesco, BlackRock, etc.) |
+| ETF tickers (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD, etc.) | Respective issuing fund companies (as identified in each fund's prospectus) |
 
 Any other product or company name referenced in the tool or its documentation is the property of its respective owner. Use of these marks is solely nominative — for the purpose of identifying compatibility — and does not imply affiliation, sponsorship, or endorsement.
 
-**MyFolio trademark status.** "MyFolio" is a common-law trademark of JJJJJ Enterprises, LLC.
+**MyFolio trademark status.** JJJJJ Enterprises, LLC claims common-law trademark rights in "MyFolio" to the extent established by use in the United States.
 
 ## 9. No Professional Advice
 
 Nothing in MyFolio, its documentation, its in-tool messages, or its marketing materials constitutes legal, tax, financial, accounting, medical, fiduciary, or any other form of professional advice. Consult a qualified professional before making decisions based on information presented by the tool.
 
-## 10. DMCA / Copyright Takedown
+## 10. Copyright Concerns
 
-If you believe material in this repository or in the extension infringes your copyright, submit a notice under 17 U.S.C. § 512(c)(3) to:
+JJJJJ Enterprises, LLC does not operate a hosting platform to which users upload content, so the 17 U.S.C. § 512(c) DMCA safe harbor is not the operative framework here. Nevertheless, if you believe material in this repository or in the extension itself infringes your copyright, please contact us with a description of the work, the allegedly infringing material, and your contact information:
 
-**Designated Copyright Agent**
+**Copyright contact**
 JJJJJ Enterprises, LLC
 legal@jjjjjenterprises.com
 
+We will review good-faith notices promptly. We reserve all rights and defenses.
+
 ## 11. Accessibility
 
-The extension uses semantic HTML, sufficient color contrast, and keyboard-navigable controls where practical. If you encounter an accessibility barrier, contact **support@jjjjjenterprises.com** with a description and we will consider improvements.
+The extension uses semantic HTML, sufficient color contrast, and keyboard-navigable controls where practical. MyFolio is a free, personal-use tool offered as-is; we make no commitment to meet any specific accessibility standard, and consistent with the no-support posture stated throughout these documents, we have no obligation to address accessibility issues. Feedback may be sent via [GitHub Issues](https://github.com/StephenRJohns/myfolio/issues), where we will, at our sole discretion and with no obligation, consider it alongside other reports.
 
 ## 12. Relationship to Other Documents
 
