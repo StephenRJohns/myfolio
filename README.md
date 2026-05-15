@@ -32,7 +32,9 @@ A cleaner, modern dashboard overlay for your LPL AccountView retirement / broker
 3. It parses those responses into a clean data model and renders a modern dashboard as an overlay in the same tab.
 4. The original site is one click away — the **◆ MyFolio View** / **◆ Standard View** toggle button switches between them.
 
-For the Performance tab's benchmark comparisons, MyFolio fetches public ETF price history from `stooq.com` (no API key needed) and caches it locally for 24 hours. Only the ticker symbol and date range are sent — no personal data.
+**Daily-value chart reconstruction.** When the brokerage's chart endpoint returns an empty history for a recently-opened account (e.g. one funded by a beneficiary transfer or rollover), MyFolio reconstructs the missing series by walking your captured transactions backwards from today's balance. To make that work you need to visit the brokerage's **Activity** page once — that fires the endpoint MyFolio caches. From then on the transactions persist across page loads and reconstruction runs automatically.
+
+**Benchmark comparisons** on the Performance tab fetch public ETF price history from `stooq.com` first; if that's blocked on your network MyFolio automatically falls back to Yahoo Finance. Both are cached locally for 24 hours. Only the ticker symbol and date range are sent — no personal data.
 
 ## What It Does NOT Do
 

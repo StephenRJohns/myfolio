@@ -1483,6 +1483,12 @@ const HELP_CONTENT = {
         <li><strong>Click any slice — or any row of the legend table</strong> — to filter the Holdings tab to that class and jump there. Click the same item again to clear.</li>
         <li>An identical donut also appears at the top of the Holdings tab; on that tab, clicking a slice/row filters in place without switching tabs.</li>
       </ul>
+      <h4>Chart accuracy &amp; account reconstruction</h4>
+      <ul>
+        <li>The brokerage's chart endpoint sometimes returns an empty daily-value series for a brand-new account (e.g. one funded by a beneficiary transfer or rollover). When that happens, MyFolio reconstructs the missing series from your captured transactions: each deposit, withdrawal, journal entry, and security transfer is backed out from today's balance to estimate prior daily values.</li>
+        <li>Reconstruction needs the historical Activity feed. The first time you use MyFolio, <strong>click the brokerage's Activity menu once</strong> — that fires the endpoint we cache. From then on the transactions persist across page loads and reconstruction runs automatically.</li>
+        <li>If reconstruction can't find any cash flows for an account, the chart falls back to flat-lining it at today's value and shows a yellow note above the chart explaining the limitation.</li>
+      </ul>
     `,
   },
   holdings: {
@@ -1558,9 +1564,9 @@ const HELP_CONTENT = {
       <h4>Compare Against (benchmark picker)</h4>
       <ul>
         <li>Ten ETF benchmarks shown as toggleable chips — broad equity, international, bonds, real estate, and gold. Check any combination.</li>
-        <li>Defaults to SPY (S&amp;P 500), VTI (US Total Market), and AGG (US Bonds). Selecting a new benchmark immediately triggers a price-history fetch.</li>
-        <li>Selections persist across sessions.</li>
-        <li>Price data is fetched from <code>stooq.com</code> and cached for 24 hours. The only thing sent is the ticker symbol and date range — no personal data.</li>
+        <li>Defaults to SPY (S&amp;P 500), VTI (US Total Market), and AGG (US Bonds). Selecting a new benchmark immediately triggers a price-history fetch — a spinner overlays the Growth chart until the new series arrives.</li>
+        <li>Selections persist across sessions; price data is cached locally for 24 hours.</li>
+        <li>Price data is fetched from <code>stooq.com</code> first; if that's blocked on your network (corporate firewall, ad-block extension, VPN, etc.) MyFolio automatically falls back to Yahoo Finance. Only the ticker symbol and date range are sent — no personal data.</li>
         <li>Benchmark returns are computed from price change only (no dividend reinvestment), so SPY/VTI will read slightly lower than the total-return figures you'd see on Morningstar. For informational purposes only.</li>
       </ul>
       <h4>About the math</h4>
@@ -1577,12 +1583,18 @@ const HELP_CONTENT = {
       <ul>
         <li>Something looks wrong (a missing value, a misclassified asset, an account that didn't appear).</li>
         <li>You want to file a bug or request a fix. Click <strong>⎘ Copy debug log</strong> to package the log for pasting into a GitHub issue or any AI assistant.</li>
-        <li>Click <strong>↺ Reload page</strong> to re-trigger the LPL API calls and capture fresh data.</li>
+        <li>Click <strong>↺ Reload page</strong> to re-trigger the brokerage's API calls and capture fresh data.</li>
       </ul>
       <h4>What you'll see</h4>
       <ul>
         <li>Successful captures (✔), informational events (●), warnings (▲), and errors (✖).</li>
-        <li>When MyFolio can't recognize a field name (for example an account's value field), it dumps all the available keys here so we can update the parser to handle your brokerage's shape.</li>
+        <li>Cache restore lines on page load, showing how many daily values and transactions were rehydrated from local storage.</li>
+        <li>Synthesis lines per account — they describe how MyFolio reconstructs daily history for accounts the brokerage didn't deliver natively, by counting cash flows from your captured transactions.</li>
+        <li>When MyFolio can't recognize a field name (for example an account's value field), it dumps all the available keys here so the parser can be updated.</li>
+      </ul>
+      <h4>Advanced: service-worker console</h4>
+      <ul>
+        <li>Cross-origin fetches (benchmark price history from Stooq / Yahoo Finance) run inside the extension's service worker, not this page. To inspect those: open <code>chrome://extensions</code>, find MyFolio, and click the <strong>"Inspect views: service worker"</strong> link. A separate DevTools window opens with the worker's console.</li>
       </ul>
     `,
   },
