@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.17';
+const MF_VERSION = 'v1.4.18';
 
 const state = {
   accounts: [],
@@ -710,9 +710,15 @@ function synthesizeMissingAccountDailies() {
       let after = 0;
       for (const cf of cfList) { if (cf.date > dt) after += cf.amount; }
       const v = acct.value - after;
-      if (v > 0) synth.push({ date: dateStr, value: v });
+      // Include zero-value entries — for a brand-new account whose entire
+      // funding lands on one day, the pre-funding entries are correctly $0
+      // (account didn't exist) and the post-funding entries carry the value.
+      // Skipping zeros would drop the series down to a single point, fail
+      // the length-check below, and leave the account out of the aggregate
+      // entirely — so the chart's ending total wouldn't match the KPI.
+      if (v >= 0) synth.push({ date: dateStr, value: v });
     }
-    if (synth.length >= 2) {
+    if (synth.length >= 1) {
       state.accountDailyValues[acct.id] = synth;
       if (cfList.length > 0) {
         reconstructed++;
