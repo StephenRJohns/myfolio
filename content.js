@@ -1175,16 +1175,15 @@ function updateStatusBar() {
     const hiddenCount = realAccounts.filter(isHiddenZeroAccount).length;
     const parts = [];
     if (realAccounts.length) {
-      const star = hiddenCount > 0 ? `<span class="mf-footnote-mark">*</span>` : '';
-      parts.push(`${realAccounts.length} account${realAccounts.length === 1 ? '' : 's'}${star}`);
+      const hiddenNote = hiddenCount > 0
+        ? ` <span style="color:#94a3b8;font-size:11px">(${hiddenCount} $0/closed hidden)</span>`
+        : '';
+      parts.push(`${realAccounts.length} account${realAccounts.length === 1 ? '' : 's'}${hiddenNote}`);
     }
     if (state.positions.length) parts.push(`${state.positions.length} positions`);
     if (state.transactions.length) parts.push(`${state.transactions.length} transactions`);
     const elapsed = state.loadStart ? ((Date.now() - state.loadStart) / 1000).toFixed(1) : '?';
-    const footnote = hiddenCount > 0
-      ? ` <span class="mf-footnote-note">*${hiddenCount} $0/closed account${hiddenCount > 1 ? 's' : ''} hidden</span>`
-      : '';
-    el.innerHTML = `Loaded in ${elapsed}s — ${parts.join(' · ')}${footnote}`;
+    el.innerHTML = `Loaded in ${elapsed}s — ${parts.join(' · ')}`;
     bar.classList.remove('mf-status-warn');
     bar.classList.add('mf-status-ok');
     if (spinner) spinner.classList.add('mf-spinner-done');
@@ -1456,7 +1455,7 @@ function modifiedDietzReturn(series, transactions, periodStart) {
     if (!td) continue;
     const tdDay = dayOf(td);
     if (tdDay < startDay || tdDay > endDay) continue;
-    const C = txn.amount || 0;
+    const C = cashFlowImpact(txn);
     if (C === 0) continue;
     const daysSinceStart = (tdDay - startDay) / 86400000;
     const W = (totalDays - daysSinceStart) / totalDays;
@@ -1531,7 +1530,7 @@ const HELP_CONTENT = {
       <ul>
         <li><strong>Click any account card</strong> to filter the entire dashboard (Overview, Holdings, Transactions, Performance) to just that account.</li>
         <li>While filtered to a single account, an "← All Accounts" chip returns you to the full portfolio view. Click the × on any active filter chip to clear it individually.</li>
-        <li>Accounts with $0 balance and no activity (closed or transfer-only) are hidden automatically. The status bar shows a footnote indicating how many are hidden.</li>
+        <li>Accounts with $0 balance and no activity (closed or transfer-only) are hidden automatically. The status bar shows a parenthetical count inline — e.g. <em>4 accounts (2 $0/closed hidden)</em>.</li>
       </ul>
       <h4>Allocation donut</h4>
       <ul>
@@ -2526,7 +2525,7 @@ function buildTwrSeries(dailyValues, transactions, startAmount = 10000) {
     const td = parseDateLoose(t.date);
     if (!td) continue;
     const k = dayOf(td);
-    cfByDay[k] = (cfByDay[k] || 0) + (t.amount || 0);
+    cfByDay[k] = (cfByDay[k] || 0) + cashFlowImpact(t);
   }
   const result = [{ date: dailyValues[0].date, close: startAmount }];
   let current = startAmount;
