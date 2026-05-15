@@ -39,13 +39,14 @@ third-party trademarks.
    they do not bind downstream forks, which are free to adopt their own
    user-facing terms.
 
-5. Third-party data: Stooq
+5. Third-party data: Stooq and Yahoo Finance
 
-   Benchmark price history is fetched from Stooq sp. z o.o. (stooq.com), a
-   third-party Polish stock-data service. The MyFolio author has no agreement
-   or relationship with Stooq. Use of Stooq is subject to Stooq's own terms
-   and privacy policy. See legal/DISCLAIMER.md § 6.2 and legal/PRIVACY.md § 5
-   for further detail.
+   Benchmark price history is fetched from Stooq sp. z o.o. (stooq.com) as
+   the primary source, with automatic fallback to Yahoo Finance
+   (query1/query2.finance.yahoo.com) when Stooq is unavailable. The MyFolio
+   author has no agreement or relationship with either service. Use of these
+   services is subject to their own terms and privacy policies. See
+   legal/DISCLAIMER.md § 6.2 and legal/PRIVACY.md §§ 5.1–5.3 for detail.
 
 6. Third-party open-source components
 

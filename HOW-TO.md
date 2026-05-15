@@ -8,7 +8,18 @@ A Chrome browser extension that overlays a clean, modern dashboard on top of you
 
 ## Installation
 
-### Step 1 — Open Chrome Extensions
+### Option A — Chrome Web Store (Recommended)
+
+1. Visit the [MyFolio listing on the Chrome Web Store](https://chrome.google.com/webstore/detail/myfolio) and click **Add to Chrome**
+2. Confirm the permission prompt
+3. Click the puzzle-piece icon in Chrome's toolbar, find **MyFolio**, and click the pin icon so it stays visible in your toolbar
+4. Skip to [Using the Dashboard](#using-the-dashboard) below
+
+### Option B — Developer / Sideload Install
+
+Use this method if you want to run MyFolio directly from source code.
+
+#### Step 1 — Open Chrome Extensions
 
 In Chrome, navigate to:
 
@@ -16,17 +27,17 @@ In Chrome, navigate to:
 chrome://extensions
 ```
 
-### Step 2 — Enable Developer Mode
+#### Step 2 — Enable Developer Mode
 
 In the top-right corner of the Extensions page, toggle **Developer mode** ON.
 
-### Step 3 — Load the Extension
+#### Step 3 — Load the Extension
 
 1. Click **Load unpacked**
 2. Navigate to and select the folder containing MyFolio
 3. The extension appears in your list as **MyFolio**
 
-### Step 4 — Pin the Extension (Optional)
+#### Step 4 — Pin the Extension (Optional)
 
 Click the puzzle-piece icon in Chrome's toolbar, find **MyFolio**, and click the pin icon so it stays visible in your toolbar.
 
@@ -121,6 +132,6 @@ MyFolio is a strictly local-only tool. It does **not**:
 - Set any cookies of its own
 - Maintain a user database or any record about you
 
-The only outbound network request MyFolio makes is to `stooq.com`, a public stock-data provider, to fetch benchmark ETF price history for the comparison charts. Only the ticker symbol and date range are sent — no personal data.
+The only outbound network requests MyFolio makes are to `stooq.com` (primary) and Yahoo Finance (`query1/2.finance.yahoo.com`, automatic fallback), public stock-data providers, to fetch benchmark ETF price history for the comparison charts. Only the ticker symbol and date range are sent — no personal data.
 
 See [legal/PRIVACY.md](legal/PRIVACY.md) for the full privacy policy.

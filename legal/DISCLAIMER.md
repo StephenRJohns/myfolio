@@ -78,7 +78,7 @@ MyFolio reads JSON responses that your browser receives from your brokerage's we
 
 ### 6.2 Benchmark Data
 
-Benchmark price history is fetched from `stooq.com`, a free public stock-data service. This data:
+Benchmark price history is fetched from `stooq.com` (primary) or Yahoo Finance at `query1.finance.yahoo.com` / `query2.finance.yahoo.com` (automatic fallback when Stooq is unavailable on your network). This data:
 
 - may be **delayed by one or more trading days**;
 - may contain **errors, missing days, or stale prices**;
@@ -110,6 +110,7 @@ JJJJJ Enterprises, LLC is not affiliated with, sponsored by, or endorsed by any 
 | LPL Financial, LPL, AccountView | LPL Financial LLC |
 | Google, Chrome, Chrome Web Store | Google LLC |
 | Stooq | Stooq sp. z o.o. |
+| Yahoo, Yahoo Finance | Yahoo Inc. |
 | ETF tickers (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD, etc.) | Respective issuing fund companies (as identified in each fund's prospectus) |
 
 Any other product or company name referenced in the tool or its documentation is the property of its respective owner. Use of these marks is solely nominative — for the purpose of identifying compatibility — and does not imply affiliation, sponsorship, or endorsement.

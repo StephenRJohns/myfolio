@@ -61,7 +61,8 @@ We reserve the right to ask you to stop using the Service if we reasonably belie
 The Service may interact with:
 
 - Your **brokerage's website** — you authenticate with the brokerage directly; the Service reads JSON responses your browser already receives.
-- **Stooq** (`stooq.com`) — public stock-data provider used for benchmark comparisons.
+- **Stooq** (`stooq.com`) — public stock-data provider used as the primary source for benchmark comparisons.
+- **Yahoo Finance** (`query1.finance.yahoo.com`, `query2.finance.yahoo.com`) — public stock-data provider used as an automatic fallback for benchmark comparisons when Stooq is unavailable on your network.
 
 Your use of those services is governed by their own terms. We do not control them, do not endorse them, and are not responsible for their availability, accuracy, or terms.
 

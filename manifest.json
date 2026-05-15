@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "MyFolio",
   "version": "1.5.0",
-  "description": "A cleaner, modern dashboard overlay for your retirement account. Personal-use tool, no data leaves your browser.",
+  "description": "A cleaner, modern dashboard overlay for LPL AccountView. Personal-use tool — no personal data ever leaves your browser.",
+  "homepage_url": "https://github.com/StephenRJohns/myfolio",
   "permissions": ["storage", "scripting"],
   "host_permissions": [
     "https://accountview.lpl.com/*",

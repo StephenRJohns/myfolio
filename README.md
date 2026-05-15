@@ -34,7 +34,7 @@ A cleaner, modern dashboard overlay for your LPL AccountView retirement / broker
 
 **Daily-value chart reconstruction.** When the brokerage's chart endpoint returns an empty history for a recently-opened account (e.g. one funded by a beneficiary transfer or rollover), MyFolio reconstructs the missing series by walking your captured transactions backwards from today's balance. To make that work you need to visit the brokerage's **Activity** page once — that fires the endpoint MyFolio caches. From then on the transactions persist across page loads and reconstruction runs automatically.
 
-**Benchmark comparisons** on the Performance tab fetch public ETF price history from `stooq.com` first; if that's blocked on your network MyFolio automatically falls back to Yahoo Finance. Both are cached locally for 24 hours. Only the ticker symbol and date range are sent — no personal data.
+**Benchmark comparisons** on the Performance tab fetch public ETF price history from `stooq.com` first; if that's blocked on your network MyFolio automatically falls back to Yahoo Finance (`query1/2.finance.yahoo.com`). Both sources are cached locally for 24 hours. Only the ticker symbol and date range are sent — no personal data.
 
 ## What It Does NOT Do
 
@@ -50,9 +50,17 @@ MyFolio **does not**:
 
 See [Privacy Policy § 2](legal/PRIVACY.md) for the complete itemized list.
 
-## Installation (Development / Sideload)
+## Installation
 
-MyFolio is not (currently) on the Chrome Web Store. Install it as an unpacked extension:
+### From the Chrome Web Store (Recommended)
+
+1. Open the [MyFolio listing on the Chrome Web Store](https://chrome.google.com/webstore/detail/myfolio) and click **Add to Chrome**
+2. Pin the extension via the puzzle-piece icon in your toolbar
+3. Open your account at `https://accountview.lpl.com/` and click **◆ MyFolio View** at the bottom-right
+
+### Developer / Sideload Install
+
+If you prefer to install directly from source:
 
 1. Clone or download this repository:
    ```

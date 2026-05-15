@@ -105,9 +105,11 @@ The Service stores a small amount of non-sensitive preference data in your own b
 
 To clear it, uninstall the extension or use Chrome's site-data settings.
 
-## 5. The ONLY Outbound Network Request the Service Makes
+## 5. Outbound Network Requests the Service Makes
 
-The Service makes one kind of outbound network request to anywhere on the internet other than the brokerage your browser is already communicating with:
+The Service makes outbound network requests to the following public stock-data services for benchmark comparisons. These requests are made in addition to the normal communication between your browser and your brokerage:
+
+### 5.1 Primary Source — Stooq
 
 **`GET https://stooq.com/q/d/l/?s={ticker}.us&d1={start}&d2={end}&i=d`**
 
@@ -117,12 +119,26 @@ This request:
 - **Sends only**: the benchmark ticker symbol and a date range — nothing else
 - **Sends nothing about you in the request body or URL**: not your name, not your account, not your portfolio
 - **Receives**: a CSV file of daily closing prices for that public ETF, identical to what any visitor to stooq.com sees
-
-**About your IP address.** As with any HTTP request to any website, Stooq's server will receive your IP address as the network source of the request. This is inherent to internet communication and is not something the extension transmits intentionally. We do not control what Stooq logs or retains about that IP; their practices are governed by their own privacy policy. If you wish to avoid this disclosure, do not select any benchmarks on the Performance tab — the Stooq request only fires when at least one benchmark is selected.
 - **Is cached**: not made more than once every 24 hours per ticker
-- **Is optional**: only happens when the Performance tab is open and benchmarks are selected
+- **Is optional**: only happens when the Performance tab is open and at least one benchmark is selected
 
 Stooq sp. z o.o. operates `stooq.com` independently. We have no agreement or relationship with Stooq. Their data and privacy practices are governed by their own website. We do not direct, control, or audit Stooq.
+
+### 5.2 Automatic Fallback — Yahoo Finance
+
+If the Stooq request fails or is blocked on your network, the Service automatically retries using Yahoo Finance:
+
+**`GET https://query1.finance.yahoo.com/v8/finance/chart/{TICKER}?interval=1d&range=5y`**
+
+(with automatic failover to `query2.finance.yahoo.com` if query1 is unavailable)
+
+This request sends only the ETF ticker symbol and a fixed date range — no personal information. The response is the same public ETF price history available to any internet user.
+
+Yahoo Finance is operated by Yahoo Inc. We have no agreement or relationship with Yahoo Inc. Their data and privacy practices are governed by their own website. We do not direct, control, or audit Yahoo Finance.
+
+### 5.3 IP Address Disclosure (Both Services)
+
+As with any HTTP request to any website, the server receiving the request will see your IP address as the network source. This is inherent to internet communication and is not something the extension transmits intentionally. We do not control what Stooq or Yahoo Finance log or retain about that IP; their practices are governed by their own privacy policies. If you wish to avoid this disclosure, do not select any benchmarks on the Performance tab — benchmark requests only fire when at least one benchmark is selected.
 
 ## 6. What the Service Sends to LPL Financial LLC
 
