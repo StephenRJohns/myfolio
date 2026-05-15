@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.14';
+const MF_VERSION = 'v1.4.15';
 
 const state = {
   accounts: [],
@@ -104,13 +104,13 @@ function safeStorageRemove(keys) {
 // Load persisted data from storage on startup
 const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_SCHEMA_VERSION = 4;  // bump to invalidate older cached series
-safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds', 'cacheSchemaVersion'], (result) => {
+safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds', 'cachedTransactions', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
   if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
 
   // Invalidate cached series written by a prior schema
   if (result.cacheSchemaVersion !== CACHE_SCHEMA_VERSION) {
-    safeStorageRemove(['cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds']);
+    safeStorageRemove(['cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds', 'cachedTransactions']);
     safeStorageSet({ cacheSchemaVersion: CACHE_SCHEMA_VERSION });
     dbg('info', 'Daily-value cache cleared (schema upgrade)');
     return;
@@ -134,6 +134,22 @@ safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'c
   if (lid && Array.isArray(lid.ids) && (Date.now() - (lid.savedAt || 0)) < DAILY_VALUES_TTL) {
     state.lplProvidedAccountIds = new Set(lid.ids);
     dbg('info', `Restored LPL-provided account ids from cache: [${lid.ids.join(', ')}]`);
+  }
+  // Restore activity-history transactions. The proactive /activity-process
+  // fetch is unreliable (cross-origin POST, server requires specific headers
+  // we don't capture), so once we've captured this data from a natural visit
+  // to /web/activity, we cache it so the chart's synthesis has it on every
+  // future load without the user having to revisit Activity each time.
+  const tx = result.cachedTransactions;
+  if (tx && Array.isArray(tx.data) && tx.data.length && (Date.now() - (tx.savedAt || 0)) < DAILY_VALUES_TTL) {
+    state.transactions = tx.data;
+    dbg('info', `Restored ${tx.data.length} transactions from cache (saved ${new Date(tx.savedAt).toLocaleTimeString()})`);
+  }
+  // If daily-value cache + transactions are both restored, re-synthesize
+  // immediately so the chart reflects the cached cash flows rather than
+  // flat-line until account-vot arrives.
+  if (state.dailyValues.length >= 2 && state.transactions.length) {
+    synthesizeMissingAccountDailies();
   }
 });
 
@@ -368,6 +384,10 @@ function parseApiResponse(url, data) {
         accountCounts[a] = (accountCounts[a] || 0) + 1;
       }
       dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, { typeCounts, accountCounts, sample: harvested[0] });
+      // Persist transactions so they survive page reloads — the
+      // /activity-process endpoint is a cross-origin POST that fails when
+      // we try to replay it proactively, so we have to keep what we caught.
+      safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: Date.now() } });
       // Re-synthesize accounts now that we may have the missing cash flows
       if (state.dailyValues.length) synthesizeMissingAccountDailies();
       refreshOverlay();
@@ -411,7 +431,7 @@ function parseApiResponse(url, data) {
 
     // Transactions from activityIntraDay.clientData.accounts[].activities[]
     const actd = data?.activityIntraDay?.clientData;
-    if (Array.isArray(actd?.accounts) && !state.transactions.length) {
+    if (Array.isArray(actd?.accounts)) {
       const all = [];
       for (const acct of actd.accounts) {
         if (Array.isArray(acct.activities)) {
@@ -419,8 +439,20 @@ function parseApiResponse(url, data) {
         }
       }
       if (all.length) {
-        dbg('ok', `Intraday activityIntraDay: ${all.length} transactions`, all[0]);
-        state.transactions = all;
+        // MERGE into existing transactions instead of replacing — the cache
+        // may already hold 41 activity-history rows from a prior visit to
+        // /web/activity, and replacing them would lose the deposit data
+        // synthesis depends on.
+        const key = (t) => `${t.accountId}|${t.date}|${t.amount}|${t.symbol}`;
+        const existing = new Map(state.transactions.map(t => [key(t), t]));
+        let added = 0;
+        for (const t of all) {
+          if (!existing.has(key(t))) { existing.set(key(t), t); added++; }
+        }
+        state.transactions = Array.from(existing.values());
+        dbg('ok', `Intraday activityIntraDay: parsed ${all.length}, added ${added} new (total ${state.transactions.length})`, all[0]);
+        // Persist so the cache stays in sync with the merged set
+        safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: Date.now() } });
         // If account-vot already ran, re-synthesize so newly-arrived cash flows
         // are factored into accounts that don't have native daily history.
         if (state.dailyValues.length) synthesizeMissingAccountDailies();
