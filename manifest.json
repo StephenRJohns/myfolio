@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "LPL Enhanced Dashboard",
+  "name": "MyFolio",
   "version": "1.0.0",
-  "description": "Enhanced frontend overlay for LPL AccountView",
+  "description": "A cleaner, modern dashboard overlay for LPL AccountView. Unofficial — not affiliated with LPL Financial LLC.",
   "permissions": ["storage", "scripting"],
-  "host_permissions": ["https://accountview.lpl.com/*"],
+  "host_permissions": [
+    "https://accountview.lpl.com/*",
+    "https://stooq.com/*"
+  ],
   "content_scripts": [
     {
       "matches": ["https://accountview.lpl.com/*"],
@@ -21,7 +24,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "LPL Modern Dashboard"
+    "default_title": "MyFolio"
   },
   "icons": {
     "16": "icons/icon16.png",

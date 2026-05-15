@@ -1,0 +1,45 @@
+# MyFolio — Proprietary Software License
+
+**Copyright © 2026 JJJJJ Enterprises, LLC. All rights reserved.**
+
+The MyFolio software, including all source code, documentation, designs, icons, and associated materials in this repository (collectively, the "Software"), is the proprietary property of JJJJJ Enterprises, LLC ("Licensor").
+
+---
+
+## 1. No License Granted by Default
+
+No rights are granted to any third party to use, copy, modify, merge, publish, distribute, sublicense, sell, or create derivative works of the Software without the prior written authorization of Licensor. Public visibility of this repository on a hosting service (e.g., GitHub) does not constitute a grant of any license, express or implied. Specifically, cloning, forking, downloading, or otherwise obtaining a copy of the Software from a public source-hosting service does not grant any right to use the Software; the only authorized use is installation through the Chrome Web Store listing (when published), or direct installation as an unpacked extension by individuals to whom Licensor has provided the Software for personal, non-commercial use.
+
+## 2. License Grant
+
+Subject to (i) your installation of the Software from the Chrome Web Store (or your direct receipt of the Software from Licensor for personal, non-commercial use), and (ii) your compliance with the Terms of Service (legal/TERMS.md) and this License, JJJJJ Enterprises, LLC grants you a limited, non-exclusive, non-transferable, revocable license to install and use the Software solely as a Chrome browser extension within your own Chrome browser, for your own personal use.
+
+## 3. Restrictions
+
+Without express written permission from Licensor, you may NOT:
+
+(a) redistribute the Software, in source or compiled form;
+(b) sell, rent, lease, lend, or sublicense the Software;
+(c) reverse-engineer, decompile, or disassemble the Software except to the extent expressly permitted by applicable law notwithstanding this restriction;
+(d) remove or alter any copyright, trademark, or other proprietary notices from the Software;
+(e) use the Software, or any portion of it, including its outputs, to train or evaluate machine learning models;
+(f) deploy the Software as part of an enterprise-wide, centralized, or multi-user monitoring system;
+(g) use the Software in violation of any applicable law or regulation, including in any manner that would violate the terms of service of LPL Financial LLC or any other third party whose services the Software interacts with.
+
+## 4. Termination
+
+This License terminates automatically upon any breach of these terms or the Terms of Service. Upon termination, you must cease all use of the Software and remove it from your browser.
+
+## 5. Trademarks
+
+"MyFolio" is a trademark of JJJJJ Enterprises, LLC. "LPL", "LPL Financial", and "AccountView" are trademarks of LPL Financial LLC and are referenced solely for compatibility identification purposes (nominative fair use); no affiliation with or endorsement by LPL Financial LLC is claimed or implied. Other product or company names referenced in the Software may be trademarks of their respective owners.
+
+## 6. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+See the [Terms of Service](legal/TERMS.md) and [Disclaimer](legal/DISCLAIMER.md) for the full limitation of liability applicable to your use of the Software.
+
+## 7. Contact
+
+For licensing inquiries: legal@jjjjjenterprises.com

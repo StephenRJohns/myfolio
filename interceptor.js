@@ -1,5 +1,10 @@
+// MyFolio — Chrome extension page-context interceptor
+// Copyright (c) 2026 JJJJJ Enterprises, LLC. All rights reserved.
+// Licensed under the MyFolio Proprietary Software License (see LICENSE).
+//
 // Injected at document_start in MAIN world to intercept all network calls.
 // Posts every request/response to the content script via window.postMessage.
+// Captured data stays in the browser and is never transmitted to any server.
 
 (function () {
   if (window.__lplCapture) return;

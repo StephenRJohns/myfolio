@@ -1,5 +1,10 @@
-// Listens for API captures from interceptor.js, parses LPL data,
-// and injects/updates the modern dashboard overlay.
+// MyFolio — Chrome extension content script
+// Copyright (c) 2026 JJJJJ Enterprises, LLC. All rights reserved.
+// Licensed under the MyFolio Proprietary Software License (see LICENSE).
+//
+// Listens for API captures from interceptor.js, parses LPL AccountView data,
+// and injects/updates the MyFolio dashboard overlay. No data leaves the browser
+// except public ETF price fetches to stooq.com for benchmark comparisons.
 
 const state = {
   accounts: [],
@@ -332,8 +337,8 @@ function injectToggleButton() {
   if (document.getElementById('lpl-toggle-btn')) return;
   const btn = document.createElement('button');
   btn.id = 'lpl-toggle-btn';
-  btn.textContent = '◆ Enhanced View';
-  btn.title = 'Switch to LPL Enhanced Dashboard';
+  btn.textContent = '◆ MyFolio View';
+  btn.title = 'Switch to MyFolio dashboard';
   btn.addEventListener('click', toggleOverlay);
   document.body.appendChild(btn);
 }
@@ -341,8 +346,8 @@ function injectToggleButton() {
 function setToggleLabel(open) {
   const btn = document.getElementById('lpl-toggle-btn');
   if (!btn) return;
-  btn.textContent = open ? '◆ Standard View' : '◆ Enhanced View';
-  btn.title = open ? 'Return to standard LPL view' : 'Switch to LPL Enhanced Dashboard';
+  btn.textContent = open ? '◆ Standard View' : '◆ MyFolio View';
+  btn.title = open ? 'Return to standard LPL view' : 'Switch to MyFolio dashboard';
 }
 
 function toggleOverlay() {
@@ -366,7 +371,7 @@ function buildOverlay() {
   overlay.id = 'lpl-overlay';
   overlay.innerHTML = `
     <div class="lpl-topbar">
-      <div class="lpl-logo">◆ LPL Enhanced Dashboard</div>
+      <div class="lpl-logo">◆ MyFolio</div>
       <nav class="lpl-nav">
         <button class="lpl-tab active" data-tab="overview">Overview</button>
         <button class="lpl-tab" data-tab="holdings">Holdings</button>
@@ -618,86 +623,185 @@ function renderTransactions() {
   `;
 }
 
-// All available benchmarks (approximate annualized returns, updated periodically)
+// Benchmark catalog — real return figures are fetched from Stooq, not hardcoded.
 const ALL_BENCHMARKS = [
-  { id: 'spy',  label: 'S&P 500',          ticker: 'SPY',  ytd:  5.5, oneY: 12.3, threeY:  8.7, fiveY: 13.1 },
-  { id: 'vti',  label: 'US Total Market',  ticker: 'VTI',  ytd:  5.1, oneY: 11.8, threeY:  8.4, fiveY: 12.7 },
-  { id: 'qqq',  label: 'Nasdaq 100',       ticker: 'QQQ',  ytd:  4.2, oneY: 17.6, threeY: 10.1, fiveY: 19.4 },
-  { id: 'iwm',  label: 'Russell 2000',     ticker: 'IWM',  ytd: -8.3, oneY: -4.2, threeY:  1.0, fiveY:  6.8 },
-  { id: 'vxus', label: 'Intl Stocks',      ticker: 'VXUS', ytd:  6.9, oneY:  8.2, threeY:  3.1, fiveY:  5.4 },
-  { id: 'agg',  label: 'US Bonds',         ticker: 'AGG',  ytd:  1.2, oneY:  2.8, threeY: -1.4, fiveY:  0.9 },
-  { id: 'tlt',  label: 'Long-Term Bonds',  ticker: 'TLT',  ytd: -4.1, oneY: -2.3, threeY:-11.2, fiveY: -3.8 },
-  { id: 'tip',  label: 'TIPS (Inflation)', ticker: 'TIP',  ytd:  2.8, oneY:  4.1, threeY:  1.2, fiveY:  3.1 },
-  { id: 'vnq',  label: 'Real Estate',      ticker: 'VNQ',  ytd: -3.2, oneY:  2.1, threeY: -2.8, fiveY:  3.9 },
-  { id: 'gld',  label: 'Gold',             ticker: 'GLD',  ytd: 23.1, oneY: 35.2, threeY: 13.4, fiveY: 13.8 },
+  { id: 'spy',  label: 'S&P 500',          ticker: 'SPY'  },
+  { id: 'vti',  label: 'US Total Market',  ticker: 'VTI'  },
+  { id: 'qqq',  label: 'Nasdaq 100',       ticker: 'QQQ'  },
+  { id: 'iwm',  label: 'Russell 2000',     ticker: 'IWM'  },
+  { id: 'vxus', label: 'Intl Stocks',      ticker: 'VXUS' },
+  { id: 'agg',  label: 'US Bonds',         ticker: 'AGG'  },
+  { id: 'tlt',  label: 'Long-Term Bonds',  ticker: 'TLT'  },
+  { id: 'tip',  label: 'TIPS (Inflation)', ticker: 'TIP'  },
+  { id: 'vnq',  label: 'Real Estate',      ticker: 'VNQ'  },
+  { id: 'gld',  label: 'Gold',             ticker: 'GLD'  },
 ];
+
+// In-memory cache of benchmark price series, keyed by ticker
+state.benchmarkSeries = {};
+state.benchmarkLoading = new Set();
+state.benchmarkErrors = {};
 
 // Persist selected benchmark IDs across sessions
 function getSelectedBenchmarks() {
   try {
-    const saved = JSON.parse(localStorage.getItem('lpl_benchmarks') || 'null');
+    const saved = JSON.parse(localStorage.getItem('myfolio_benchmarks') || 'null');
     if (Array.isArray(saved)) return saved;
   } catch (e) {}
-  return ['spy', 'vti', 'agg'];  // defaults
+  return ['spy', 'vti', 'agg'];
 }
 function saveSelectedBenchmarks(ids) {
-  localStorage.setItem('lpl_benchmarks', JSON.stringify(ids));
+  localStorage.setItem('myfolio_benchmarks', JSON.stringify(ids));
+}
+
+// ── Stooq benchmark fetcher (CSV, 24-hour cache) ────────────────────────────
+async function loadBenchmarkSeries(ticker) {
+  const key = ticker.toLowerCase();
+  if (state.benchmarkSeries[key]) return state.benchmarkSeries[key];
+  if (state.benchmarkLoading.has(key)) return null;
+  state.benchmarkLoading.add(key);
+
+  try {
+    const cached = await chrome.storage.local.get(`bm_${key}`);
+    const entry = cached[`bm_${key}`];
+    if (entry && Date.now() - entry.fetchedAt < 24 * 60 * 60 * 1000) {
+      state.benchmarkSeries[key] = entry.data;
+      state.benchmarkLoading.delete(key);
+      return entry.data;
+    }
+
+    const end = new Date();
+    const start = new Date(end.getTime() - 1825 * 86400000); // 5 years back
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const url = `https://stooq.com/q/d/l/?s=${key}.us&d1=${fmt(start)}&d2=${fmt(end)}&i=d`;
+
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const text = await resp.text();
+    const data = parseStooqCsv(text);
+    if (!data.length) throw new Error('Empty or unparseable CSV');
+
+    state.benchmarkSeries[key] = data;
+    await chrome.storage.local.set({ [`bm_${key}`]: { data, fetchedAt: Date.now() } });
+    dbg('ok', `Stooq: fetched ${data.length} bars for ${ticker}`);
+    return data;
+  } catch (err) {
+    state.benchmarkErrors[key] = String(err.message || err);
+    dbg('warn', `Stooq fetch failed for ${ticker}`, { error: state.benchmarkErrors[key] });
+    return null;
+  } finally {
+    state.benchmarkLoading.delete(key);
+  }
+}
+
+function parseStooqCsv(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const header = lines[0].split(',');
+  const dateIdx = header.findIndex(h => /^date$/i.test(h.trim()));
+  const closeIdx = header.findIndex(h => /^close$/i.test(h.trim()));
+  if (dateIdx < 0 || closeIdx < 0) return [];
+
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(',');
+    const date = cells[dateIdx];
+    const close = parseFloat(cells[closeIdx]);
+    if (date && !isNaN(close)) out.push({ date, close });
+  }
+  return out;
+}
+
+// Compute period returns from a price series
+function periodReturns(series) {
+  if (!series || series.length < 2) return { ytd: null, oneY: null, threeY: null, fiveY: null };
+  const latest = series[series.length - 1];
+  const find = (predicate) => {
+    for (let i = series.length - 1; i >= 0; i--) if (predicate(series[i])) return series[i];
+    return null;
+  };
+  const now = new Date(latest.date);
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const startBars = {
+    ytd:   find(d => new Date(d.date) < yearStart) || series[0],
+    oneY:  find(d => new Date(d.date) <= new Date(now.getFullYear() - 1, now.getMonth(), now.getDate())) || series[0],
+    threeY:find(d => new Date(d.date) <= new Date(now.getFullYear() - 3, now.getMonth(), now.getDate())) || series[0],
+    fiveY: find(d => new Date(d.date) <= new Date(now.getFullYear() - 5, now.getMonth(), now.getDate())) || series[0],
+  };
+  const pct = (s) => s ? ((latest.close - s.close) / s.close) * 100 : null;
+  return { ytd: pct(startBars.ytd), oneY: pct(startBars.oneY), threeY: pct(startBars.threeY), fiveY: pct(startBars.fiveY) };
 }
 
 function renderPerformance() {
-  const perf = state.performance;
-  const hasPerf = Object.keys(perf).length > 0;
   const selected = getSelectedBenchmarks();
   const activeBenchmarks = ALL_BENCHMARKS.filter(b => selected.includes(b.id));
+  const hasPortfolioHistory = state.dailyValues.length >= 2;
 
-  const periods = [
-    { keys: ['ytdReturn', 'ytd'],             label: 'YTD' },
-    { keys: ['oneYearReturn', '1y'],           label: '1 Year' },
-    { keys: ['threeYearReturn', '3y'],         label: '3 Year' },
-    { keys: ['fiveYearReturn', '5y'],          label: '5 Year' },
-  ];
+  // Real returns from benchmark series (only what we have data for)
+  const benchmarkRows = activeBenchmarks.map(b => {
+    const series = state.benchmarkSeries[b.ticker.toLowerCase()];
+    return { ...b, series, returns: series ? periodReturns(series) : null };
+  });
+  const hasAnyBenchmarkData = benchmarkRows.some(b => b.series);
+  const allBenchmarksLoaded = activeBenchmarks.length > 0 && benchmarkRows.every(b => b.series);
 
-  const portfolioVals = periods.map(p => p.keys.map(k => perf[k]).find(v => v != null) ?? null);
+  // Portfolio period returns — only show if we have either explicit performance data OR enough history
+  const perf = state.performance;
+  const portfolioReturns = hasPortfolioHistory
+    ? periodReturns(state.dailyValues.map(d => ({ date: d.date, close: d.value })))
+    : { ytd: perf.ytdReturn ?? perf.ytd ?? null, oneY: null, threeY: null, fiveY: null };
 
-  const portfolioRow = portfolioVals.map(val =>
-    `<td class="right ${val > 0 ? 'pos' : val < 0 ? 'neg' : ''}">${val != null ? fmtPct(val) : '—'}</td>`
-  ).join('');
-
-  const bmValues = [null, ...activeBenchmarks.map(b => b.ytd)];  // null = portfolio placeholder for bar chart
+  const hasAnyReturns = portfolioReturns.ytd != null || hasAnyBenchmarkData;
 
   return `
     <div class="lpl-section">
-      ${state.dailyValues.length ? `
-      <h3 class="lpl-section-title">Portfolio Value Over Time</h3>
-      <canvas id="lpl-perf-line" width="1000" height="260" style="width:100%;display:block;margin-bottom:28px"></canvas>
+      ${hasPortfolioHistory ? `
+        <h3 class="lpl-section-title">Portfolio Value Over Time</h3>
+        <canvas id="mf-perf-value" style="width:100%;display:block;margin-bottom:28px;height:260px"></canvas>
       ` : ''}
 
-      <h3 class="lpl-section-title">Returns vs Benchmarks</h3>
-      <canvas id="lpl-perf-bar" width="1000" height="240" style="width:100%;display:block;margin-bottom:24px"></canvas>
+      ${hasPortfolioHistory && allBenchmarksLoaded ? `
+        <h3 class="lpl-section-title">Growth of $10,000</h3>
+        <p class="lpl-note" style="margin-top:-8px;margin-bottom:12px">Normalized to $10,000 invested at the start of available history. Compares your portfolio against selected benchmarks.</p>
+        <canvas id="mf-perf-growth" style="width:100%;display:block;margin-bottom:28px;height:300px"></canvas>
+      ` : ''}
 
-      <table class="lpl-table" style="margin-bottom:24px">
-        <thead><tr>
-          <th>Portfolio / Index</th>
-          ${periods.map(p => `<th class="right">${p.label}</th>`).join('')}
-        </tr></thead>
-        <tbody>
-          <tr class="highlight">
-            <td><strong>Your Portfolio</strong></td>${portfolioRow}
-          </tr>
-          ${activeBenchmarks.map(b => `
-            <tr>
-              <td>${b.label} <span style="color:#475569;font-size:11px">${b.ticker}</span></td>
-              <td class="right ${b.ytd >= 0 ? 'pos' : 'neg'}">${fmtPct(b.ytd)}</td>
-              <td class="right ${b.oneY >= 0 ? 'pos' : 'neg'}">${fmtPct(b.oneY)}</td>
-              <td class="right ${b.threeY >= 0 ? 'pos' : 'neg'}">${fmtPct(b.threeY)}</td>
-              <td class="right ${b.fiveY >= 0 ? 'pos' : 'neg'}">${fmtPct(b.fiveY)}</td>
+      ${hasAnyReturns ? `
+        <h3 class="lpl-section-title">Period Returns</h3>
+        <table class="lpl-table" style="margin-bottom:24px">
+          <thead><tr>
+            <th>Portfolio / Benchmark</th>
+            <th class="right">YTD</th>
+            <th class="right">1 Year</th>
+            <th class="right">3 Year</th>
+            <th class="right">5 Year</th>
+          </tr></thead>
+          <tbody>
+            <tr class="highlight">
+              <td><strong>Your Portfolio</strong></td>
+              ${returnCells(portfolioReturns)}
             </tr>
-          `).join('')}
-        </tbody>
-      </table>
+            ${benchmarkRows.map(b => b.series ? `
+              <tr>
+                <td>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
+                ${returnCells(b.returns)}
+              </tr>
+            ` : `
+              <tr>
+                <td>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
+                <td colspan="4" style="color:#64748b;font-size:12px;text-align:center;font-style:italic">
+                  ${state.benchmarkErrors[b.ticker.toLowerCase()]
+                    ? 'Unable to fetch market data — retry later'
+                    : 'Loading market data…'}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : ''}
 
       <h3 class="lpl-section-title">Compare Against</h3>
-      <div class="lpl-bm-picker" id="lpl-bm-picker">
+      <div class="lpl-bm-picker" id="mf-bm-picker">
         ${ALL_BENCHMARKS.map(b => `
           <label class="lpl-bm-chip ${selected.includes(b.id) ? 'active' : ''}">
             <input type="checkbox" value="${b.id}" ${selected.includes(b.id) ? 'checked' : ''} style="display:none">
@@ -706,64 +810,83 @@ function renderPerformance() {
         `).join('')}
       </div>
 
-      <p class="lpl-note">Benchmark returns are approximate annualized figures as of ${new Date().toLocaleDateString('en-US', {month:'short',year:'numeric'})}. ${!hasPerf ? 'Navigate to your LPL performance page to load your actual returns.' : ''}</p>
+      ${!hasPortfolioHistory ? `
+        <p class="lpl-note">No historical portfolio data captured yet. Open your LPL performance page (My Accounts → Performance) so MyFolio can capture the daily value history needed for charts.</p>
+      ` : ''}
+
+      <p class="lpl-note">Benchmark price data is fetched from public sources (stooq.com) and cached for 24 hours. Returns are calculated from total price change and do not include dividend reinvestment. For informational purposes only — not investment advice.</p>
     </div>
   `;
 }
 
-function initPerformanceCharts() {
-  // Benchmark picker
-  document.getElementById('lpl-bm-picker')?.querySelectorAll('input[type=checkbox]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const ids = [...document.querySelectorAll('#lpl-bm-picker input:checked')].map(i => i.value);
-      saveSelectedBenchmarks(ids);
-      renderContent();
-    });
-  });
-  drawLineChart();
-  drawBarChart();
+function returnCells(r) {
+  if (!r) return '<td class="right">—</td>'.repeat(4);
+  const cell = v => `<td class="right ${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v != null ? fmtPct(v) : '—'}</td>`;
+  return cell(r.ytd) + cell(r.oneY) + cell(r.threeY) + cell(r.fiveY);
 }
 
-function drawLineChart() {
-  const canvas = document.getElementById('lpl-perf-line');
-  if (!canvas || !state.dailyValues.length) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 1000, H = 260;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
+function initPerformanceCharts() {
+  // Wire up the benchmark picker
+  document.getElementById('mf-bm-picker')?.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const ids = [...document.querySelectorAll('#mf-bm-picker input:checked')].map(i => i.value);
+      saveSelectedBenchmarks(ids);
+      renderContent();
+      // Kick off fetches for newly-selected benchmarks
+      for (const id of ids) {
+        const b = ALL_BENCHMARKS.find(x => x.id === id);
+        if (b && !state.benchmarkSeries[b.ticker.toLowerCase()]) {
+          loadBenchmarkSeries(b.ticker).then(() => {
+            if (state.activeTab === 'performance') renderContent();
+          });
+        }
+      }
+    });
+  });
 
-  const pad = { top: 20, right: 20, bottom: 36, left: 72 };
+  // Trigger fetches for any selected benchmark we don't have yet
+  const selected = getSelectedBenchmarks();
+  let triggered = false;
+  for (const id of selected) {
+    const b = ALL_BENCHMARKS.find(x => x.id === id);
+    if (b && !state.benchmarkSeries[b.ticker.toLowerCase()] && !state.benchmarkLoading.has(b.ticker.toLowerCase())) {
+      triggered = true;
+      loadBenchmarkSeries(b.ticker).then(() => {
+        if (state.activeTab === 'performance') renderContent();
+      });
+    }
+  }
+
+  drawPortfolioValueChart();
+  drawGrowthChart();
+}
+
+// ── Portfolio value over time (single line, your portfolio in $) ────────────
+function drawPortfolioValueChart() {
+  const canvas = document.getElementById('mf-perf-value');
+  if (!canvas || !state.dailyValues.length) return;
+  setupCanvas(canvas, 260);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth, H = 260;
+  const pad = { top: 16, right: 20, bottom: 36, left: 80 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
   const vals = state.dailyValues;
   const values = vals.map(d => d.value);
   const minV = Math.min(...values), maxV = Math.max(...values);
-  const range = maxV - minV || 1;
+  const range = (maxV - minV) || 1;
 
   const xOf = i => pad.left + (i / (vals.length - 1)) * cw;
   const yOf = v => pad.top + ch - ((v - minV) / range) * ch;
 
-  // Background
-  ctx.fillStyle = '#0a1020';
-  ctx.fillRect(0, 0, W, H);
+  drawChartBackground(ctx, W, H);
+  drawGridY(ctx, pad, cw, ch, 4, (v) => fmt$(minV + range * v));
 
-  // Zero/grid lines
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.top + (ch / 4) * i;
-    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
-    const label = fmt$(minV + (range / 4) * (4 - i));
-    ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui'; ctx.textAlign = 'right';
-    ctx.fillText(label, pad.left - 6, y + 4);
-  }
-
-  // Fill under line
+  // Filled area under line
   const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-  grad.addColorStop(0, 'rgba(99,102,241,0.35)');
-  grad.addColorStop(1, 'rgba(99,102,241,0.02)');
+  grad.addColorStop(0, 'rgba(129,140,248,0.35)');
+  grad.addColorStop(1, 'rgba(129,140,248,0.02)');
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(vals[0].value));
   for (let i = 1; i < vals.length; i++) ctx.lineTo(xOf(i), yOf(vals[i].value));
@@ -781,103 +904,156 @@ function drawLineChart() {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // X-axis date labels (show ~5)
-  ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-  const step = Math.floor(vals.length / 5) || 1;
-  for (let i = 0; i < vals.length; i += step) {
-    ctx.fillText(fmtDateShort(vals[i].date), xOf(i), H - 8);
-  }
-  ctx.fillText(fmtDateShort(vals[vals.length - 1].date), xOf(vals.length - 1), H - 8);
+  drawXAxisDates(ctx, vals.map(v => v.date), xOf, H);
 }
 
-function drawBarChart() {
-  const canvas = document.getElementById('lpl-perf-bar');
+// ── Growth of $10,000 (portfolio + benchmarks, normalized) ──────────────────
+function drawGrowthChart() {
+  const canvas = document.getElementById('mf-perf-growth');
   if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 1000, H = 240;
-  canvas.width = W * dpr; canvas.height = H * dpr;
+  if (!state.dailyValues.length) return;
+  setupCanvas(canvas, 300);
+
   const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const perf = state.performance;
-  const selected = getSelectedBenchmarks();
-  const active = ALL_BENCHMARKS.filter(b => selected.includes(b.id));
-
-  const periods = ['YTD', '1Y', '3Y', '5Y'];
-  const portfolioVals = [
-    perf.ytdReturn ?? perf.ytd ?? null,
-    perf.oneYearReturn ?? perf['1y'] ?? null,
-    perf.threeYearReturn ?? perf['3y'] ?? null,
-    perf.fiveYearReturn ?? perf['5y'] ?? null,
-  ];
-
-  const rows = [
-    { label: 'Portfolio', color: '#6366f1', vals: portfolioVals },
-    ...active.map((b, i) => ({
-      label: b.ticker,
-      color: ['#475569','#64748b','#94a3b8','#cbd5e1','#e2e8f0'][i % 5],
-      vals: [b.ytd, b.oneY, b.threeY, b.fiveY],
-    })),
-  ];
-
-  const allVals = rows.flatMap(r => r.vals).filter(v => v != null);
-  if (!allVals.length) { ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, W, H); return; }
-
-  const maxAbs = Math.max(Math.abs(Math.min(...allVals)), Math.abs(Math.max(...allVals)), 5);
-  const pad = { top: 20, right: 20, bottom: 28, left: 40 };
+  const W = canvas.offsetWidth, H = 300;
+  const pad = { top: 16, right: 100, bottom: 36, left: 80 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
-  const zeroY = pad.top + ch * (maxAbs / (maxAbs * 2));
 
-  ctx.fillStyle = '#0a1020'; ctx.fillRect(0, 0, W, H);
+  // Determine common date range based on portfolio history
+  const portfolioStart = state.dailyValues[0].date;
+  const portfolioEnd = state.dailyValues[state.dailyValues.length - 1].date;
 
-  // Zero line
-  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad.left, zeroY); ctx.lineTo(pad.left + cw, zeroY); ctx.stroke();
+  // Build series list: portfolio + each selected benchmark
+  const selected = getSelectedBenchmarks();
+  const lines = [{
+    label: 'Your Portfolio',
+    color: '#818cf8',
+    width: 3,
+    series: state.dailyValues.map(d => ({ date: d.date, close: d.value })),
+  }];
 
-  const groupW = cw / periods.length;
-  const barW = Math.min(24, (groupW - 16) / rows.length);
+  const benchmarkColors = ['#fb923c', '#34d399', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee', '#fbbf24', '#94a3b8', '#fda4af'];
+  selected.forEach((id, i) => {
+    const b = ALL_BENCHMARKS.find(x => x.id === id);
+    if (!b) return;
+    const series = state.benchmarkSeries[b.ticker.toLowerCase()];
+    if (!series) return;
+    // Trim to portfolio's date window
+    const filtered = series.filter(d => d.date >= portfolioStart && d.date <= portfolioEnd);
+    if (filtered.length >= 2) {
+      lines.push({ label: b.ticker, color: benchmarkColors[i % benchmarkColors.length], width: 2, series: filtered });
+    }
+  });
 
-  periods.forEach((period, pi) => {
-    const gx = pad.left + pi * groupW;
-    const totalBarW = barW * rows.length + 4 * (rows.length - 1);
-    let bx = gx + (groupW - totalBarW) / 2;
+  // Normalize each series to start at 10000
+  const normalized = lines.map(l => {
+    const base = l.series[0].close;
+    return { ...l, points: l.series.map(d => ({ date: d.date, value: (d.close / base) * 10000 })) };
+  });
 
-    rows.forEach(row => {
-      const val = row.vals[pi];
-      if (val != null) {
-        const barH = Math.abs(val / maxAbs) * (ch / 2);
-        const by = val >= 0 ? zeroY - barH : zeroY;
-        ctx.fillStyle = val >= 0 ? row.color : '#f87171';
-        ctx.fillRect(bx, by, barW, barH);
+  // Find global min/max for Y axis
+  let minY = Infinity, maxY = -Infinity;
+  normalized.forEach(l => l.points.forEach(p => { if (p.value < minY) minY = p.value; if (p.value > maxY) maxY = p.value; }));
+  const range = (maxY - minY) || 1;
 
-        ctx.fillStyle = '#94a3b8'; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
-        const labelY = val >= 0 ? by - 3 : by + barH + 10;
-        ctx.fillText(fmtPct(val), bx + barW / 2, labelY);
-      }
-      bx += barW + 4;
+  // Get a unified date axis (union of all dates would be huge; use portfolio's)
+  const allDates = state.dailyValues.map(d => d.date);
+  const xOf = (date) => {
+    const idx = allDates.findIndex(d => d >= date);
+    const ratio = idx < 0 ? 1 : (idx / Math.max(1, allDates.length - 1));
+    return pad.left + ratio * cw;
+  };
+  const yOf = v => pad.top + ch - ((v - minY) / range) * ch;
+
+  drawChartBackground(ctx, W, H);
+
+  // Reference line at $10,000 (starting value)
+  const baselineY = yOf(10000);
+  ctx.strokeStyle = '#334155';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(pad.left, baselineY); ctx.lineTo(pad.left + cw, baselineY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#64748b'; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+  ctx.fillText('$10K start', pad.left - 6, baselineY + 3);
+
+  drawGridY(ctx, pad, cw, ch, 4, (v) => fmt$(Math.round(minY + range * v)));
+
+  // Draw each line
+  normalized.forEach(l => {
+    ctx.beginPath();
+    l.points.forEach((p, i) => {
+      const x = xOf(p.date);
+      const y = yOf(p.value);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
-
-    // Period label
-    ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText(period, gx + groupW / 2, H - 6);
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = l.width;
+    ctx.stroke();
   });
 
-  // Legend
-  const lx = pad.left, ly = 4;
-  rows.forEach((row, i) => {
-    const x = lx + i * 80;
-    ctx.fillStyle = row.color; ctx.fillRect(x, ly, 10, 10);
-    ctx.fillStyle = '#94a3b8'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText(row.label, x + 14, ly + 9);
+  drawXAxisDates(ctx, allDates, (date) => xOf(date), H, true);
+
+  // Legend (right side)
+  const lx = pad.left + cw + 10, ly = pad.top + 8;
+  normalized.forEach((l, i) => {
+    const y = ly + i * 20;
+    ctx.fillStyle = l.color;
+    ctx.fillRect(lx, y, 12, 3);
+    ctx.fillStyle = '#cbd5e1'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText(l.label, lx + 18, y + 4);
+    const final = l.points[l.points.length - 1].value;
+    ctx.fillStyle = final >= 10000 ? '#4ade80' : '#f87171';
+    ctx.font = '10px system-ui';
+    ctx.fillText(fmt$(Math.round(final)), lx + 18, y + 16);
   });
+}
+
+// ── Canvas helpers ──────────────────────────────────────────────────────────
+function setupCanvas(canvas, height) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth || 1000;
+  canvas.width = W * dpr;
+  canvas.height = height * dpr;
+  canvas.style.height = height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+}
+
+function drawChartBackground(ctx, W, H) {
+  ctx.fillStyle = '#0a1020';
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawGridY(ctx, pad, cw, ch, lines, labelFn) {
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px system-ui';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= lines; i++) {
+    const y = pad.top + (ch / lines) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+    const ratio = (lines - i) / lines;
+    ctx.fillText(labelFn(ratio), pad.left - 6, y + 4);
+  }
+}
+
+function drawXAxisDates(ctx, dates, xOf, H, byDate = false) {
+  if (!dates.length) return;
+  ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(dates.length / 6));
+  for (let i = 0; i < dates.length; i += step) {
+    const x = byDate ? xOf(dates[i]) : xOf(i);
+    ctx.fillText(fmtDateShort(dates[i]), x, H - 8);
+  }
 }
 
 function fmtDateShort(d) {
   if (!d) return '';
   const dt = new Date(d);
   if (isNaN(dt)) return String(d).slice(0, 10);
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return dt.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 }
 
 // ── Debug tab ────────────────────────────────────────────────────────────────

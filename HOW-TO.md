@@ -1,6 +1,8 @@
-# LPL Modern Dashboard — How-To Guide
+# MyFolio — How-To Guide
 
 A Chrome browser extension that overlays a clean, modern dashboard on top of LPL AccountView. No separate login, no credential handling — it works with your existing browser session.
+
+> **Unofficial.** MyFolio is not affiliated with, endorsed by, or sponsored by LPL Financial LLC. "LPL", "LPL Financial", and "AccountView" are trademarks of LPL Financial LLC.
 
 ---
 
@@ -21,15 +23,12 @@ In the top-right corner of the Extensions page, toggle **Developer mode** ON.
 ### Step 3 — Load the Extension
 
 1. Click **Load unpacked**
-2. Navigate to and select the folder:
-   ```
-   /home/stephen-johns/github/lpl
-   ```
-3. The extension appears in your list as **LPL Modern Dashboard**
+2. Navigate to and select the folder containing MyFolio
+3. The extension appears in your list as **MyFolio**
 
 ### Step 4 — Pin the Extension (Optional)
 
-Click the puzzle-piece icon in Chrome's toolbar, find **LPL Modern Dashboard**, and click the pin icon so it stays visible in your toolbar.
+Click the puzzle-piece icon in Chrome's toolbar, find **MyFolio**, and click the pin icon so it stays visible in your toolbar.
 
 ---
 
@@ -38,16 +37,16 @@ Click the puzzle-piece icon in Chrome's toolbar, find **LPL Modern Dashboard**, 
 ### Opening It
 
 1. Go to `https://accountview.lpl.com` and log in as you normally would
-2. Once logged in, look for the **◆ Enhanced View** button in the bottom-right corner of the page
-3. Click it to open the full-screen dashboard
+2. Once logged in, look for the **◆ MyFolio View** button in the bottom-right corner of the page
+3. Click it to open the full-screen MyFolio dashboard
 
-Click it again (or press the **✕** button inside) to close the dashboard and return to the original LPL interface.
+Click **◆ Standard View** (the same button, now relabeled) or the **✕** button to return to the original LPL interface.
 
 ### Loading Your Data
 
-The extension captures data as you navigate LPL's site. To populate all four tabs:
+The extension captures data as you navigate LPL's site. To populate all tabs:
 
-| Dashboard Tab | Navigate to in LPL |
+| MyFolio Tab | Navigate to in LPL |
 |---|---|
 | Overview | Account overview / summary page |
 | Holdings | Portfolio / positions / holdings page |
@@ -73,29 +72,24 @@ You only need to visit each page once per session — the data is captured autom
 
 ### Transactions
 - Chronological activity list, most recent first
-- Color-coded type badges: Buy (green), Sell (red), Dividend (purple), Transfer (blue)
+- Color-coded type badges
 - Columns: Date, Type, Symbol, Description, Quantity, Price, Amount
 
 ### Performance
-- Your portfolio returns compared side-by-side with three benchmark indexes:
-  - S&P 500 (SPY)
-  - Total Market (VTI)
-  - Bonds (AGG)
-- Time periods: YTD, 1 Year, 3 Year, 5 Year
-- Green = positive return, red = negative return
+- Portfolio value over time (when LPL has historical data available)
+- Benchmark comparison vs. ETFs you select (data fetched from public sources)
 
 ---
 
 ## Troubleshooting
 
-**The ◆ Enhanced View button doesn't appear**
+**The ◆ MyFolio View button doesn't appear**
 - Make sure you are on `accountview.lpl.com` (the extension only runs on that domain)
 - Try reloading the page after the extension is installed
 
 **A tab shows "—" instead of values**
-- LPL's API field names may differ slightly from what the extension expects
-- Navigate to that section of LPL's site (e.g., the Holdings page) to trigger a fresh data load
-- If it still shows "—", open Chrome DevTools → Network tab, filter by XHR/Fetch, and look for API responses containing your account data — share a sample and the field names can be added
+- Triple-tap the Shift key to open the hidden Debug tab and use **⎘ Copy for Claude** to capture diagnostics
+- Navigate to the corresponding LPL page to trigger a fresh data load
 
 **Data is missing after logging back in**
 - Session data is not persisted between logins; navigate to each LPL page once to re-capture it
@@ -110,7 +104,7 @@ You only need to visit each page once per session — the data is captured autom
 If changes are made to the extension files:
 
 1. Go to `chrome://extensions`
-2. Find **LPL Modern Dashboard**
+2. Find **MyFolio**
 3. Click the circular refresh icon on the extension card
 4. Reload any open LPL tabs
 
@@ -118,6 +112,7 @@ If changes are made to the extension files:
 
 ## Privacy & Security
 
-- **No data leaves your browser.** The extension reads API responses that your browser already receives from LPL and displays them in a local overlay.
+- **No personal data leaves your browser.** The extension reads API responses that your browser already receives from LPL and displays them in a local overlay.
 - **No credentials are stored or transmitted.** Authentication is handled entirely by LPL's own login flow.
-- **No external libraries or CDNs.** The extension is 100% local — no network requests of its own.
+- **External data**: When the Performance tab fetches benchmark comparisons, MyFolio requests public ETF price history from `stooq.com`. No personal data is sent — only the benchmark ticker symbols (e.g., SPY, VTI, AGG).
+- See [legal/PRIVACY.md](legal/PRIVACY.md) for the full privacy policy.

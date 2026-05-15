@@ -3,26 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width">
-  <title>LPL Dashboard</title>
+  <title>MyFolio</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 260px;
+      width: 300px;
       background: #0f172a;
       color: #e2e8f0;
       font: 14px/1.5 system-ui, sans-serif;
       padding: 20px;
     }
     h1 {
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 700;
       background: linear-gradient(90deg, #818cf8, #c4b5fd);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      margin-bottom: 10px;
+      margin-bottom: 4px;
     }
-    p { font-size: 12px; color: #64748b; line-height: 1.7; }
+    .tagline { font-size: 11px; color: #64748b; margin-bottom: 12px; }
+    p { font-size: 12px; color: #94a3b8; line-height: 1.7; }
     .steps { margin-top: 14px; list-style: none; counter-reset: steps; }
     .steps li {
       counter-increment: steps;
@@ -30,8 +31,8 @@
       gap: 10px;
       align-items: flex-start;
       font-size: 12px;
-      color: #94a3b8;
-      padding: 6px 0;
+      color: #cbd5e1;
+      padding: 7px 0;
       border-bottom: 1px solid #1e293b;
     }
     .steps li:last-child { border-bottom: none; }
@@ -62,18 +63,50 @@
       text-align: center;
       width: 100%;
     }
+    .disclaimer {
+      margin-top: 16px;
+      padding: 10px;
+      background: #1e1b3a;
+      border-left: 3px solid #6366f1;
+      border-radius: 4px;
+      font-size: 10px;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    .footer {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #1e293b;
+      font-size: 10px;
+      color: #475569;
+      display: flex;
+      justify-content: space-between;
+    }
+    .footer a { color: #818cf8; text-decoration: none; }
   </style>
 </head>
 <body>
-  <h1>◆ LPL Modern Dashboard</h1>
-  <p>A modern UI overlay for LPL AccountView.</p>
+  <h1>◆ MyFolio</h1>
+  <div class="tagline">A cleaner view for your retirement account</div>
+
   <ol class="steps">
     <li>Log in to accountview.lpl.com normally</li>
-    <li>Click the <strong>◆ Enhanced View</strong> button in the bottom-right corner</li>
-    <li>Navigate to Overview, Holdings, and Activity pages so data is captured</li>
-    <li>Your dashboard updates automatically</li>
+    <li>Click <strong>◆ MyFolio View</strong> at the bottom-right of the page</li>
+    <li>Browse Overview, Holdings, Activity tabs in your LPL account so MyFolio can capture the data</li>
+    <li>Your modern dashboard updates automatically</li>
   </ol>
+
   <button class="btn" id="open-btn">Open AccountView</button>
+
+  <div class="disclaimer">
+    <strong>Unofficial.</strong> MyFolio is not affiliated with, endorsed by, or sponsored by LPL Financial LLC. All data stays in your browser — nothing is transmitted to any server.
+  </div>
+
+  <div class="footer">
+    <span>v1.0.0</span>
+    <a href="https://github.com/StephenRJohns/myfolio" target="_blank">GitHub</a>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
