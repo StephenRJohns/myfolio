@@ -1506,7 +1506,8 @@ const HELP_CONTENT = {
             <li><strong>Ending Market Value</strong> — most recent captured portfolio value.</li>
           </ul>
         </li>
-        <li>Use the <strong>All / 1 Year / YTD / 1 Month</strong> buttons above the chart to change the time window. The stats panel updates to match. A date-range label at the bottom-left of the chart confirms what's shown.</li>
+        <li>Use the <strong>All / 1 Year / YTD / 1 Month / Custom</strong> buttons above the chart to change the time window. The stats panel and date-range label next to the section title update to match.</li>
+        <li><strong>Custom</strong> opens a popover with Start and End date inputs and an Apply button. Pick any two dates within your captured history and the chart redraws to that window. Useful for zooming in on a specific event (e.g. days around a deposit) when the preset periods are too coarse.</li>
         <li>The blue line is your portfolio value; the orange dotted line is cumulative invested capital. <strong>$</strong> markers indicate captured cash-flow dates.</li>
       </ul>
       <h4>Account cards</h4>
