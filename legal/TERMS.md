@@ -47,10 +47,12 @@ If your brokerage notifies us that it objects to the Service, or if its terms of
 You agree NOT to use the Service to:
 
 - access any account that is not your own, or to which you do not have an explicit right of access;
-- redistribute, sublicense, resell, modify, reverse-engineer, or create derivative works of the Service (see [LICENSE](../LICENSE));
 - circumvent any security control, rate limit, or terms imposed by any third party;
 - use the Service in any manner that violates applicable law, including U.S. securities laws, privacy laws, or computer-misuse laws;
-- use the Service to scrape, archive, or extract data from any brokerage beyond the personal viewing of your own account.
+- use the Service to scrape, archive, or extract data from any brokerage beyond the personal viewing of your own account;
+- represent the Service as endorsed by, affiliated with, or operated by LPL Financial LLC or any other brokerage.
+
+The Service is licensed under the [MIT License](../LICENSE), which permits copying, modification, distribution, and creation of derivative works. The restrictions above are obligations between **you and JJJJJ Enterprises, LLC** governing your use of the official distribution; they do not limit the rights granted to you by the MIT License with respect to the source code itself. If you redistribute or fork the Service, your downstream users are bound only by the license you apply to your distribution.
 
 We reserve the right to ask you to stop using the Service if we reasonably believe you are violating these Terms.
 

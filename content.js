@@ -1,6 +1,6 @@
 // MyFolio — Chrome extension content script
-// Copyright (c) 2026 JJJJJ Enterprises, LLC. All rights reserved.
-// Licensed under the MyFolio Proprietary Software License (see LICENSE).
+// Copyright (c) 2026 JJJJJ Enterprises, LLC.
+// Licensed under the MIT License (see LICENSE).
 //
 // Listens for API captures from interceptor.js, parses brokerage account data,
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
@@ -11,7 +11,9 @@ const state = {
   positions: [],
   transactions: [],
   performance: {},
-  dailyValues: [],   // [{date, value}] aggregated across accounts
+  dailyValues: [],         // [{date, value}] aggregated across accounts
+  accountDailyValues: {},  // accountId -> [{date, value}]
+  selectedAccountId: null, // null = view all; 'portfolio' acts the same as null
   overlayOpen: false,
   apiCallCount: 0,
   lastApiTime: null,
@@ -115,7 +117,7 @@ function parseApiResponse(url, data) {
       for (const acct of acctList) {
         if (Array.isArray(acct.position)) {
           for (const p of acct.position) {
-            all.push(normalizeBrokeragePosition(p));
+            all.push(normalizeBrokeragePosition(p, acct));
           }
         }
       }
@@ -153,7 +155,7 @@ function parseApiResponse(url, data) {
       const all = [];
       for (const acct of pid.account) {
         if (Array.isArray(acct.position)) {
-          for (const p of acct.position) all.push(normalizeBrokeragePosition(p));
+          for (const p of acct.position) all.push(normalizeBrokeragePosition(p, acct));
         }
       }
       if (all.length) {
@@ -169,7 +171,7 @@ function parseApiResponse(url, data) {
       const all = [];
       for (const acct of actd.accounts) {
         if (Array.isArray(acct.activities)) {
-          for (const t of acct.activities) all.push(normalizeBrokerageTxn(t));
+          for (const t of acct.activities) all.push(normalizeBrokerageTxn(t, acct));
         }
       }
       if (all.length) {
@@ -195,19 +197,36 @@ function parseApiResponse(url, data) {
         dbg('ok', 'account-vot: performance', { ytd: live.chartData.PeriodTotalReturn, itd: live.chartData.ITDTotalReturn });
       }
 
-      // Aggregate dailyValues across all accounts by date
+      // Aggregate dailyValues across all accounts by date + capture per-account
       const byDate = {};
+      const perAcct = {};
       for (const acct of accts) {
+        const acctId = String(acct.accountId || acct.accountNumber || '');
+        const acctSeries = [];
         for (const dv of (acct.chartData?.dailyValues || [])) {
           const d = dv.date || dv.asOfDate || dv.Date;
           const v = toNum(dv.endValue ?? dv.value ?? dv.portfolioValue ?? dv.Value ?? dv.EndValue);
-          if (d && v != null) byDate[d] = (byDate[d] || 0) + v;
+          if (d && v != null) {
+            byDate[d] = (byDate[d] || 0) + v;
+            acctSeries.push({ date: d, value: v });
+          }
+        }
+        if (acctId && acctSeries.length) {
+          acctSeries.sort((a, b) => a.date.localeCompare(b.date));
+          perAcct[acctId] = acctSeries;
+          // Backfill missing account value with the latest daily endValue
+          const accIdx = state.accounts.findIndex(x => x.id === acctId);
+          if (accIdx >= 0 && (state.accounts[accIdx].value == null || state.accounts[accIdx].value === 0)) {
+            state.accounts[accIdx].value = acctSeries[acctSeries.length - 1].value;
+          }
         }
       }
+      state.accountDailyValues = perAcct;
+
       const sorted = Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
       if (sorted.length) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
-        dbg('ok', `account-vot: ${sorted.length} daily values`, sorted[sorted.length - 1]);
+        dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, sorted[sorted.length - 1]);
       } else {
         dbg('info', 'account-vot: no dailyValues (may need a longer date range)');
       }
@@ -277,11 +296,26 @@ function flattenPerf(data) {
 
 // ── Brokerage-specific normalizers (field names from awsp.myaccountviewonline.com) ─
 function normalizeBrokerageAccount(a) {
+  const id = String(a.accountId || a.accountNumber || '');
+  const value = toNum(
+    a.marketValue ?? a.totalValue ?? a.accountValue ?? a.balance ??
+    a.endingMarketValue ?? a.currentMarketValue ?? a.endBalance ??
+    a.currentBalance ?? a.accountBalance ?? a.endingBalance ??
+    a.assetMarketValue ?? a.marketVal ?? a.mktVal ?? a.mktValue ??
+    a.acctValue ?? a.portfolioValue ?? a.endValue ?? a.endingValue ??
+    a.totalMarketValue ?? a.value ??
+    a.balance?.marketValue ?? a.summary?.marketValue ??
+    a.summary?.totalValue ?? a.summary?.endingValue ?? null
+  );
+  if (value == null) {
+    dbg('warn', `Account value unrecognized for "${a.accountName || a.nickName || id}"`, { keys: Object.keys(a) });
+  }
   return {
-    id: String(a.accountId || a.accountNumber || ''),
+    id,
+    accountNumber: String(a.accountNumber || ''),
     name: a.accountName || a.nickName || a.accountNumber || '',
     type: a.accountClassName || a.accountClassCode || '',
-    value: toNum(a.marketValue ?? a.totalValue ?? a.accountValue ?? a.balance ?? null),
+    value,
     change: toNum(a.dayChange ?? a.mktValChange ?? null),
     changePct: toNum(a.dayChangePercentage ?? a.dayChangePct ?? null),
     ytdReturn: toNum(a.ytdReturn ?? null),
@@ -289,8 +323,9 @@ function normalizeBrokerageAccount(a) {
   };
 }
 
-function normalizeBrokeragePosition(p) {
+function normalizeBrokeragePosition(p, parentAcct = null) {
   return {
+    accountId: parentAcct ? String(parentAcct.accountId || parentAcct.accountNumber || '') : '',
     // Real field names from observed responses
     symbol: p.symbolCusip || p.symbol || p.cusip || '',
     name: (p.description || p.longName || '').replace(/\r\n/g, ' ').replace(/\s+/g, ' ').trim(),
@@ -305,8 +340,9 @@ function normalizeBrokeragePosition(p) {
   };
 }
 
-function normalizeBrokerageTxn(t) {
+function normalizeBrokerageTxn(t, parentAcct = null) {
   return {
+    accountId: parentAcct ? String(parentAcct.accountId || parentAcct.accountNumber || '') : '',
     date: t.asOfDate || t.tradeDate || t.transactionDate || '',
     type: t.transCode || t.transactionType || t.activityType || '',
     symbol: t.symbolCusip || t.symbol || '',
@@ -403,6 +439,32 @@ function buildOverlay() {
     });
   });
 
+  // Delegated click handling for account-card drill-in and breadcrumb back
+  const bodyEl = document.getElementById('mf-body');
+  if (bodyEl) {
+    bodyEl.addEventListener('click', (e) => {
+      if (e.target.closest('#mf-back-all')) {
+        state.selectedAccountId = null;
+        renderContent();
+        return;
+      }
+      const card = e.target.closest('.mf-account-card[data-acct-id]');
+      if (card) {
+        state.selectedAccountId = card.dataset.acctId;
+        renderContent();
+      }
+    });
+    bodyEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const card = e.target.closest('.mf-account-card[data-acct-id]');
+      if (card) {
+        e.preventDefault();
+        state.selectedAccountId = card.dataset.acctId;
+        renderContent();
+      }
+    });
+  }
+
   state.activeTab = 'overview';
   renderContent();
   updateStatusBar();
@@ -490,6 +552,47 @@ setInterval(() => {
   if (!hasData) updateStatusBar();
 }, 1000);
 
+// ── Account filtering helpers ───────────────────────────────────────────────
+function isHiddenZeroAccount(a) {
+  if (!a || a.id === 'portfolio') return false;
+  const zeroVal = a.value === 0 || a.value == null;
+  const zeroChange = (a.change == null || a.change === 0) && (a.changePct == null || a.changePct === 0);
+  return zeroVal && zeroChange;
+}
+
+function getSelectedAccount() {
+  const id = state.selectedAccountId;
+  if (!id || id === 'portfolio') return null;
+  return state.accounts.find(a => a.id === id) || null;
+}
+
+function filteredPositions() {
+  const acct = getSelectedAccount();
+  return acct ? state.positions.filter(p => p.accountId === acct.id) : state.positions;
+}
+
+function filteredTransactions() {
+  const acct = getSelectedAccount();
+  return acct ? state.transactions.filter(t => t.accountId === acct.id) : state.transactions;
+}
+
+function filteredDailyValues() {
+  const acct = getSelectedAccount();
+  if (acct && state.accountDailyValues[acct.id]) return state.accountDailyValues[acct.id];
+  return state.dailyValues;
+}
+
+function renderBreadcrumb() {
+  const acct = getSelectedAccount();
+  if (!acct) return '';
+  return `
+    <div class="mf-breadcrumb">
+      <button class="mf-breadcrumb-back" id="mf-back-all">← All Accounts</button>
+      <span>Viewing: <strong>${escHtml(acct.name)}</strong>${acct.type ? ` · ${escHtml(acct.type)}` : ''}</span>
+    </div>
+  `;
+}
+
 // ── Tab renderers ────────────────────────────────────────────────────────────
 function renderContent() {
   const body = document.getElementById('mf-body');
@@ -505,46 +608,71 @@ function renderContent() {
 }
 
 function renderOverview() {
-  const total = state.accounts.reduce((s, a) => s + (a.value || 0), 0);
-  const totalChange = state.accounts.reduce((s, a) => s + (a.change || 0), 0);
-  const changePct = total > 0 ? (totalChange / (total - totalChange)) * 100 : 0;
-  const hasAccounts = state.accounts.length > 0;
+  const selectedAcct = getSelectedAccount();
+  const visibleAccounts = state.accounts.filter(a => !isHiddenZeroAccount(a));
+  const hasAccounts = visibleAccounts.length > 0;
+
+  // KPIs reflect either the selected account or the whole portfolio
+  let kpiLabel, kpiValue, kpiChange, kpiChangePct, ytd;
+  if (selectedAcct) {
+    kpiLabel = 'Account Value';
+    kpiValue = selectedAcct.value;
+    kpiChange = selectedAcct.change || 0;
+    kpiChangePct = selectedAcct.changePct != null ? selectedAcct.changePct : null;
+    ytd = selectedAcct.ytdReturn;
+  } else {
+    // Exclude portfolio sentinel from the per-account sum, but use it if present for accuracy
+    const portfolio = state.accounts.find(a => a.id === 'portfolio');
+    const indivAccts = state.accounts.filter(a => a.id !== 'portfolio' && !isHiddenZeroAccount(a));
+    const total = portfolio ? portfolio.value : indivAccts.reduce((s, a) => s + (a.value || 0), 0);
+    const totalChange = portfolio ? (portfolio.change || 0) : indivAccts.reduce((s, a) => s + (a.change || 0), 0);
+    kpiLabel = 'Total Portfolio Value';
+    kpiValue = total;
+    kpiChange = totalChange;
+    kpiChangePct = total > 0 && (total - totalChange) > 0 ? (totalChange / (total - totalChange)) * 100 : null;
+    ytd = state.performance.ytdReturn;
+  }
+
+  const positionsCount = filteredPositions().length;
 
   return `
     <div class="mf-section">
+      ${renderBreadcrumb()}
       <div class="mf-kpi-row">
         <div class="mf-kpi">
-          <div class="mf-kpi-label">Total Portfolio Value</div>
-          <div class="mf-kpi-value">${hasAccounts ? fmt$(total) : '—'}</div>
-          ${hasAccounts ? `<div class="mf-kpi-sub ${totalChange >= 0 ? 'pos' : 'neg'}">${totalChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(totalChange))} (${fmtPct(changePct)}) today</div>` : `<div class="mf-kpi-waiting"><span class="mf-spinner"></span> Waiting for data…</div>`}
+          <div class="mf-kpi-label">${kpiLabel}</div>
+          <div class="mf-kpi-value">${hasAccounts || selectedAcct ? fmt$(kpiValue) : '—'}</div>
+          ${(hasAccounts || selectedAcct)
+            ? `<div class="mf-kpi-sub ${kpiChange >= 0 ? 'pos' : 'neg'}">${kpiChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(kpiChange))}${kpiChangePct != null ? ` (${fmtPct(kpiChangePct)})` : ''} today</div>`
+            : `<div class="mf-kpi-waiting"><span class="mf-spinner"></span> Waiting for data…</div>`}
         </div>
-        ${state.performance.ytdReturn != null ? `
+        ${ytd != null ? `
         <div class="mf-kpi">
           <div class="mf-kpi-label">YTD Return</div>
-          <div class="mf-kpi-value ${state.performance.ytdReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(state.performance.ytdReturn)}</div>
+          <div class="mf-kpi-value ${ytd >= 0 ? 'pos' : 'neg'}">${fmtPct(ytd)}</div>
         </div>` : ''}
-        ${state.positions.length ? `
+        ${positionsCount ? `
         <div class="mf-kpi">
           <div class="mf-kpi-label">Positions</div>
-          <div class="mf-kpi-value">${state.positions.length}</div>
+          <div class="mf-kpi-value">${positionsCount}</div>
         </div>` : ''}
       </div>
 
-      ${hasAccounts ? `
-      <h3 class="mf-section-title">Accounts</h3>
+      ${!selectedAcct && hasAccounts ? `
+      <h3 class="mf-section-title">Accounts <span class="mf-hint">click an account to filter</span></h3>
       <div class="mf-account-grid">
-        ${state.accounts.map(a => `
-          <div class="mf-account-card">
-            <div class="mf-account-name">${a.name}</div>
-            <div class="mf-account-type">${a.type}</div>
+        ${visibleAccounts.map(a => `
+          <div class="mf-account-card ${a.id !== 'portfolio' ? 'mf-clickable' : ''}" ${a.id !== 'portfolio' ? `data-acct-id="${escHtml(a.id)}" role="button" tabindex="0"` : ''}>
+            <div class="mf-account-name">${escHtml(a.name)}</div>
+            <div class="mf-account-type">${escHtml(a.type || '')}</div>
             <div class="mf-account-value">${fmt$(a.value)}</div>
             ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
             ${a.unrealizedGL != null ? `<div class="mf-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
           </div>
         `).join('')}
-      </div>` : `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>`}
+      </div>` : !hasAccounts && !selectedAcct ? `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>` : ''}
 
-      ${state.positions.length ? `
+      ${positionsCount ? `
       <h3 class="mf-section-title">Allocation</h3>
       <canvas id="mf-alloc-chart" width="400" height="220"></canvas>` : ''}
     </div>
@@ -552,13 +680,21 @@ function renderOverview() {
 }
 
 function renderHoldings() {
-  if (!state.positions.length) return `<div class="mf-empty">No holdings data captured yet. Navigate to your holdings page.</div>`;
+  const positions = filteredPositions();
+  if (!positions.length) {
+    return `
+      <div class="mf-section">
+        ${renderBreadcrumb()}
+        <div class="mf-empty">${getSelectedAccount() ? 'No holdings found for this account.' : 'No holdings data captured yet. Navigate to your holdings page.'}</div>
+      </div>`;
+  }
 
-  const sorted = [...state.positions].sort((a, b) => (b.value || 0) - (a.value || 0));
+  const sorted = [...positions].sort((a, b) => (b.value || 0) - (a.value || 0));
   const total = sorted.reduce((s, p) => s + (p.value || 0), 0);
 
   return `
     <div class="mf-section">
+      ${renderBreadcrumb()}
       <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span></h3>
       <canvas id="mf-alloc-chart" width="400" height="220" style="margin-bottom:24px"></canvas>
       <table class="mf-table">
@@ -593,12 +729,20 @@ function renderHoldings() {
 }
 
 function renderTransactions() {
-  if (!state.transactions.length) return `<div class="mf-empty">No transaction data captured yet. Navigate to your activity/history page.</div>`;
+  const txns = filteredTransactions();
+  if (!txns.length) {
+    return `
+      <div class="mf-section">
+        ${renderBreadcrumb()}
+        <div class="mf-empty">${getSelectedAccount() ? 'No transactions found for this account.' : 'No transaction data captured yet. Navigate to your activity/history page.'}</div>
+      </div>`;
+  }
 
-  const sorted = [...state.transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const sorted = [...txns].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   return `
     <div class="mf-section">
+      ${renderBreadcrumb()}
       <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span></h3>
       <table class="mf-table">
         <thead><tr>
@@ -735,7 +879,9 @@ function periodReturns(series) {
 function renderPerformance() {
   const selected = getSelectedBenchmarks();
   const activeBenchmarks = ALL_BENCHMARKS.filter(b => selected.includes(b.id));
-  const hasPortfolioHistory = state.dailyValues.length >= 2;
+  const dailyValues = filteredDailyValues();
+  const hasPortfolioHistory = dailyValues.length >= 2;
+  const selectedAcct = getSelectedAccount();
 
   // Real returns from benchmark series (only what we have data for)
   const benchmarkRows = activeBenchmarks.map(b => {
@@ -748,13 +894,15 @@ function renderPerformance() {
   // Portfolio period returns — only show if we have either explicit performance data OR enough history
   const perf = state.performance;
   const portfolioReturns = hasPortfolioHistory
-    ? periodReturns(state.dailyValues.map(d => ({ date: d.date, close: d.value })))
-    : { ytd: perf.ytdReturn ?? perf.ytd ?? null, oneY: null, threeY: null, fiveY: null };
+    ? periodReturns(dailyValues.map(d => ({ date: d.date, close: d.value })))
+    : { ytd: selectedAcct ? (selectedAcct.ytdReturn ?? null) : (perf.ytdReturn ?? perf.ytd ?? null), oneY: null, threeY: null, fiveY: null };
 
   const hasAnyReturns = portfolioReturns.ytd != null || hasAnyBenchmarkData;
+  const portfolioLabel = selectedAcct ? selectedAcct.name : 'Your Portfolio';
 
   return `
     <div class="mf-section">
+      ${renderBreadcrumb()}
       ${hasPortfolioHistory ? `
         <h3 class="mf-section-title">Portfolio Value Over Time</h3>
         <canvas id="mf-perf-value" style="width:100%;display:block;margin-bottom:28px;height:260px"></canvas>
@@ -778,7 +926,7 @@ function renderPerformance() {
           </tr></thead>
           <tbody>
             <tr class="highlight">
-              <td><strong>Your Portfolio</strong></td>
+              <td><strong>${escHtml(portfolioLabel)}</strong></td>
               ${returnCells(portfolioReturns)}
             </tr>
             ${benchmarkRows.map(b => b.series ? `
@@ -864,7 +1012,8 @@ function initPerformanceCharts() {
 // ── Portfolio value over time (single line, your portfolio in $) ────────────
 function drawPortfolioValueChart() {
   const canvas = document.getElementById('mf-perf-value');
-  if (!canvas || !state.dailyValues.length) return;
+  const vals = filteredDailyValues();
+  if (!canvas || !vals.length) return;
   setupCanvas(canvas, 260);
   const ctx = canvas.getContext('2d');
   const W = canvas.offsetWidth, H = 260;
@@ -872,7 +1021,6 @@ function drawPortfolioValueChart() {
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
-  const vals = state.dailyValues;
   const values = vals.map(d => d.value);
   const minV = Math.min(...values), maxV = Math.max(...values);
   const range = (maxV - minV) || 1;
@@ -910,8 +1058,9 @@ function drawPortfolioValueChart() {
 // ── Growth of $10,000 (portfolio + benchmarks, normalized) ──────────────────
 function drawGrowthChart() {
   const canvas = document.getElementById('mf-perf-growth');
+  const portfolioSeries = filteredDailyValues();
   if (!canvas) return;
-  if (!state.dailyValues.length) return;
+  if (!portfolioSeries.length) return;
   setupCanvas(canvas, 300);
 
   const ctx = canvas.getContext('2d');
@@ -921,16 +1070,17 @@ function drawGrowthChart() {
   const ch = H - pad.top - pad.bottom;
 
   // Determine common date range based on portfolio history
-  const portfolioStart = state.dailyValues[0].date;
-  const portfolioEnd = state.dailyValues[state.dailyValues.length - 1].date;
+  const portfolioStart = portfolioSeries[0].date;
+  const portfolioEnd = portfolioSeries[portfolioSeries.length - 1].date;
 
   // Build series list: portfolio + each selected benchmark
   const selected = getSelectedBenchmarks();
+  const selectedAcct = getSelectedAccount();
   const lines = [{
-    label: 'Your Portfolio',
+    label: selectedAcct ? selectedAcct.name : 'Your Portfolio',
     color: '#818cf8',
     width: 3,
-    series: state.dailyValues.map(d => ({ date: d.date, close: d.value })),
+    series: portfolioSeries.map(d => ({ date: d.date, close: d.value })),
   }];
 
   const benchmarkColors = ['#fb923c', '#34d399', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee', '#fbbf24', '#94a3b8', '#fda4af'];
@@ -958,7 +1108,7 @@ function drawGrowthChart() {
   const range = (maxY - minY) || 1;
 
   // Get a unified date axis (union of all dates would be huge; use portfolio's)
-  const allDates = state.dailyValues.map(d => d.date);
+  const allDates = portfolioSeries.map(d => d.date);
   const xOf = (date) => {
     const idx = allDates.findIndex(d => d >= date);
     const ratio = idx < 0 ? 1 : (idx / Math.max(1, allDates.length - 1));
@@ -1139,15 +1289,16 @@ function escHtml(s) {
 // ── Allocation donut chart (pure canvas, no dependencies) ───────────────────
 function renderAllocationChart() {
   const canvas = document.getElementById('mf-alloc-chart');
-  if (!canvas || !state.positions.length) return;
+  const positions = filteredPositions();
+  if (!canvas || !positions.length) return;
 
   const ctx = canvas.getContext('2d');
-  const total = state.positions.reduce((s, p) => s + (p.value || 0), 0);
+  const total = positions.reduce((s, p) => s + (p.value || 0), 0);
   if (total === 0) return;
 
   // Group by asset class or top-10 by value
   const grouped = {};
-  const sorted = [...state.positions].sort((a, b) => (b.value || 0) - (a.value || 0));
+  const sorted = [...positions].sort((a, b) => (b.value || 0) - (a.value || 0));
   const top = sorted.slice(0, 9);
   const other = sorted.slice(9);
 

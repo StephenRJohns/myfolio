@@ -148,4 +148,4 @@ This Disclaimer supplements and is incorporated into the [Terms of Service](TERM
 
 ---
 
-Copyright © 2026 JJJJJ Enterprises, LLC. All rights reserved.
+Copyright © 2026 JJJJJ Enterprises, LLC. Source code licensed under the [MIT License](../LICENSE).
