@@ -46,17 +46,39 @@ function dbg(level, msg, detail) {
   if (state.activeTab === 'debug') renderDebugTab();
 }
 
+// Defensive wrappers for chrome.* APIs. When the extension is reloaded while
+// a page is still open, the old content script loses its connection and every
+// chrome.* call throws "Extension context invalidated." These helpers swallow
+// that case quietly — the page will re-inject the new content script on the
+// next reload.
+function extensionContextValid() {
+  try { return !!chrome?.runtime?.id; } catch (e) { return false; }
+}
+function safeStorageGet(keys, cb) {
+  if (!extensionContextValid()) { cb && cb({}); return; }
+  try { chrome.storage.local.get(keys, (r) => { try { cb && cb(r || {}); } catch (e) {} }); }
+  catch (e) { cb && cb({}); }
+}
+function safeStorageSet(items) {
+  if (!extensionContextValid()) return;
+  try { chrome.storage.local.set(items); } catch (e) {}
+}
+function safeStorageRemove(keys) {
+  if (!extensionContextValid()) return;
+  try { chrome.storage.local.remove(keys); } catch (e) {}
+}
+
 // Load persisted data from storage on startup
 const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_SCHEMA_VERSION = 2;  // bump to invalidate older cached series
-chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cacheSchemaVersion'], (result) => {
+safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
   if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
 
   // Invalidate cached series written by a prior schema (e.g. before the v>0 filter)
   if (result.cacheSchemaVersion !== CACHE_SCHEMA_VERSION) {
-    chrome.storage.local.remove(['cachedDailyValues', 'cachedAccountDailyValues']);
-    chrome.storage.local.set({ cacheSchemaVersion: CACHE_SCHEMA_VERSION });
+    safeStorageRemove(['cachedDailyValues', 'cachedAccountDailyValues']);
+    safeStorageSet({ cacheSchemaVersion: CACHE_SCHEMA_VERSION });
     dbg('info', 'Daily-value cache cleared (schema upgrade)');
     return;
   }
@@ -80,7 +102,8 @@ chrome.storage.local.get(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyV
 // Runs when we have account data but no daily value history yet.
 async function proactiveFetchVot() {
   if (state.dailyValues.length >= 2) return;
-  const result = await chrome.storage.local.get(['accountVotRequest']);
+  if (!extensionContextValid()) return;
+  const result = await new Promise((resolve) => safeStorageGet(['accountVotRequest'], resolve));
   const req = result.accountVotRequest;
   if (!req?.url) {
     dbg('info', 'Proactive VoT fetch: no saved URL yet — will capture on first account-vot intercept');
@@ -113,12 +136,12 @@ async function proactiveFetchVot() {
 function recordLoadTime(ms) {
   if (state.sessionRecorded) return;
   state.sessionRecorded = true;
-  chrome.storage.local.get(['loadTimes'], (result) => {
+  safeStorageGet(['loadTimes'], (result) => {
     const times = result.loadTimes || [];
     times.push(ms);
     if (times.length > 10) times.shift(); // keep last 10 sessions
     state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
-    chrome.storage.local.set({ loadTimes: times });
+    safeStorageSet({ loadTimes: times });
   });
 }
 
@@ -137,7 +160,7 @@ window.addEventListener('message', (event) => {
     parseApiResponse(url, data);
     // Save account-vot request so we can replay it proactively on future page loads
     if (url.toLowerCase().includes('account-vot')) {
-      chrome.storage.local.set({ accountVotRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
+      safeStorageSet({ accountVotRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
     }
   } else if (msg.type === 'MF_WS_OPEN') {
     dbg('warn', `WebSocket opened — data may flow through this`, { url: msg.url });
@@ -325,7 +348,7 @@ function parseApiResponse(url, data) {
         dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
         // Persist so the chart survives page reloads without revisiting Performance page
         const now = Date.now();
-        chrome.storage.local.set({
+        safeStorageSet({
           cachedDailyValues: { data: state.dailyValues, savedAt: now },
           cachedAccountDailyValues: { data: state.accountDailyValues, savedAt: now },
         });
@@ -1662,7 +1685,7 @@ async function loadBenchmarkSeries(ticker) {
   state.benchmarkLoading.add(key);
 
   try {
-    const cached = await chrome.storage.local.get(`bm_${key}`);
+    const cached = await new Promise((resolve) => safeStorageGet(`bm_${key}`, resolve));
     const entry = cached[`bm_${key}`];
     if (entry && Date.now() - entry.fetchedAt < 24 * 60 * 60 * 1000) {
       state.benchmarkSeries[key] = entry.data;
@@ -1682,7 +1705,7 @@ async function loadBenchmarkSeries(ticker) {
     if (!data.length) throw new Error('Empty or unparseable CSV');
 
     state.benchmarkSeries[key] = data;
-    await chrome.storage.local.set({ [`bm_${key}`]: { data, fetchedAt: Date.now() } });
+    safeStorageSet({ [`bm_${key}`]: { data, fetchedAt: Date.now() } });
     dbg('ok', `Stooq: fetched ${data.length} bars for ${ticker}`);
     return data;
   } catch (err) {
