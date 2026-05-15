@@ -56,16 +56,31 @@ function extensionContextValid() {
 }
 function safeStorageGet(keys, cb) {
   if (!extensionContextValid()) { cb && cb({}); return; }
-  try { chrome.storage.local.get(keys, (r) => { try { cb && cb(r || {}); } catch (e) {} }); }
-  catch (e) { cb && cb({}); }
+  try {
+    const p = chrome.storage.local.get(keys, (r) => {
+      try { void chrome.runtime?.lastError; } catch (e) {}
+      try { cb && cb(r || {}); } catch (e) {}
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => { cb && cb({}); });
+  } catch (e) { cb && cb({}); }
 }
 function safeStorageSet(items) {
   if (!extensionContextValid()) return;
-  try { chrome.storage.local.set(items); } catch (e) {}
+  try {
+    const p = chrome.storage.local.set(items, () => {
+      try { void chrome.runtime?.lastError; } catch (e) {}
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch (e) {}
 }
 function safeStorageRemove(keys) {
   if (!extensionContextValid()) return;
-  try { chrome.storage.local.remove(keys); } catch (e) {}
+  try {
+    const p = chrome.storage.local.remove(keys, () => {
+      try { void chrome.runtime?.lastError; } catch (e) {}
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch (e) {}
 }
 
 // Load persisted data from storage on startup
