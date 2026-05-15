@@ -1440,16 +1440,25 @@ function modifiedDietzReturn(series, transactions, periodStart) {
   const totalDays = (endDate - startDate) / 86400000;
   if (BV <= 0 || totalDays < 1) return null;
 
+  // Compare calendar days, not datetimes. Daily-value series uses local-midnight
+  // timestamps but transactions may carry UTC timestamps (e.g. T07:00:00.000Z =
+  // 02:00 CDT). Raw Date comparison would classify a same-calendar-day deposit as
+  // "after endDate" and exclude it, leaving deposits uncorrected in the return.
+  const dayOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const startDay = dayOf(startDate);
+  const endDay   = dayOf(endDate);
+
   let netFlow = 0;
   let weightedFlow = 0;
   for (const txn of transactions || []) {
     if (!isCashFlow(txn)) continue;
     const td = parseDateLoose(txn.date);
     if (!td) continue;
-    if (td < startDate || td > endDate) continue;
+    const tdDay = dayOf(td);
+    if (tdDay < startDay || tdDay > endDay) continue;
     const C = txn.amount || 0;
     if (C === 0) continue;
-    const daysSinceStart = (td - startDate) / 86400000;
+    const daysSinceStart = (tdDay - startDay) / 86400000;
     const W = (totalDays - daysSinceStart) / totalDays;
     netFlow += C;
     weightedFlow += C * W;
@@ -2508,18 +2517,24 @@ function drawPortfolioValueChart() {
 // performance so deposits don't appear as gains in the chart.
 function buildTwrSeries(dailyValues, transactions, startAmount = 10000) {
   if (!dailyValues || dailyValues.length < 2) return [];
-  const cfByDate = {};
+  // Key cash flows by calendar-day timestamp (local) so UTC-timestamped
+  // transactions match local-midnight daily-value entries on the same date.
+  const dayOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const cfByDay = {};
   for (const t of transactions || []) {
     if (!isCashFlow(t)) continue;
-    if (!t.date) continue;
-    cfByDate[t.date] = (cfByDate[t.date] || 0) + (t.amount || 0);
+    const td = parseDateLoose(t.date);
+    if (!td) continue;
+    const k = dayOf(td);
+    cfByDay[k] = (cfByDay[k] || 0) + (t.amount || 0);
   }
   const result = [{ date: dailyValues[0].date, close: startAmount }];
   let current = startAmount;
   for (let i = 1; i < dailyValues.length; i++) {
     const bv = dailyValues[i - 1].value;
     const ev = dailyValues[i].value;
-    const cf = cfByDate[dailyValues[i].date] || 0;
+    const dvDate = parseDateLoose(dailyValues[i].date);
+    const cf = (dvDate ? cfByDay[dayOf(dvDate)] : 0) || 0;
     if (bv > 0) {
       current = Math.max(0, current * (1 + (ev - bv - cf) / bv));
     }

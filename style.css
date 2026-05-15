@@ -90,7 +90,7 @@
   margin-left: auto;
   background: none;
   border: 1px solid #1e293b;
-  color: #f1f5f9;
+  color: #f59e0b;
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -101,7 +101,7 @@
   justify-content: center;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.mf-help-btn:hover { background: #1e1b4b; border-color: #4338ca; color: #c7d2fe; }
+.mf-help-btn:hover { background: #2d1f00; border-color: #f59e0b; color: #fbbf24; }
 
 .mf-close {
   background: none;
