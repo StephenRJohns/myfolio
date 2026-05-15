@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.1';
+const MF_VERSION = 'v1.4.2';
 
 const state = {
   accounts: [],
@@ -382,6 +382,9 @@ function parseApiResponse(url, data) {
       if (sorted.length) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
         dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
+        // Drop any rows dated past today (defensive: prevents future-dated
+        // placeholders from pulling the chart down at the right edge)
+        dropFutureDatedValues();
         // Fill in any accounts that have a current value but no daily history
         synthesizeMissingAccountDailies();
         // Persist so the chart survives page reloads without revisiting Performance page
@@ -476,13 +479,19 @@ function backfillAccountValues() {
 
 // Synthesize a daily-value series for accounts that have a current value but
 // no daily history (the brokerage returned an empty dailyValues array). Walks
-// backwards from today's value, subtracting cash flows from later dates. The
-// result is added to the aggregate state.dailyValues so the portfolio chart
-// reflects the full portfolio, not just the subset with native history.
+// backwards from today's value, subtracting cash flows from later dates.
+//
+// IMPORTANT: We only synthesize when we can find at least one cash-flow
+// transaction OR the current value is small enough that "flat-line" is
+// believable. Otherwise we'd fabricate a misleading history (e.g. showing a
+// $58k retirement account as $58k all year, when most of that came from a
+// recent $46k deposit). The aggregate then under-represents today's true
+// portfolio total, but at least the shape is honest.
 function synthesizeMissingAccountDailies() {
   if (!state.dailyValues.length || !state.accounts.length) return;
   const dates = state.dailyValues.map(d => d.date);
   let synthesizedCount = 0;
+  let skippedCount = 0;
   const addToAggregate = (dailySeries) => {
     const aggMap = new Map(state.dailyValues.map(d => [d.date, d.value]));
     for (const d of dailySeries) {
@@ -507,6 +516,16 @@ function synthesizeMissingAccountDailies() {
       if (td) cfList.push({ date: td, amount: t.amount || 0 });
     }
 
+    // If we have NO cash-flow evidence and the account is big (>$10k), skip
+    // synthesis entirely — a flat line of its current value across history
+    // would misrepresent the timeline. Better to under-state aggregate than
+    // to fabricate.
+    if (cfList.length === 0 && acct.value > 10000) {
+      skippedCount++;
+      dbg('warn', `Skipping ${acct.name} ($${Math.round(acct.value)}) in chart — no daily history and no cash-flow transactions found to reconstruct it`);
+      continue;
+    }
+
     // For each anchor date in the aggregate, account_value(date) =
     // current_value - sum_of_cash_flows_strictly_after(date)
     const synth = [];
@@ -526,6 +545,29 @@ function synthesizeMissingAccountDailies() {
     }
   }
   if (synthesizedCount) dbg('ok', `Aggregate daily values rebuilt with ${synthesizedCount} synthesized account series`);
+  if (skippedCount) dbg('info', `${skippedCount} account${skippedCount > 1 ? 's' : ''} excluded from chart — chart may understate total portfolio value`);
+}
+
+// Drop any daily-value entries dated after today. Brokerages occasionally
+// return placeholder rows for the current trading day with $0 (pre-market
+// settlement) or stale values that would visually pull the chart down.
+function dropFutureDatedValues() {
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  const isPastOrToday = (dateStr) => {
+    const d = parseDateLoose(dateStr);
+    return d && d <= today;
+  };
+  if (state.dailyValues.length) {
+    const before = state.dailyValues.length;
+    state.dailyValues = state.dailyValues.filter(x => isPastOrToday(x.date));
+    if (state.dailyValues.length !== before) {
+      dbg('info', `Filtered ${before - state.dailyValues.length} future-dated daily value(s) from the aggregate`);
+    }
+  }
+  for (const id of Object.keys(state.accountDailyValues || {})) {
+    state.accountDailyValues[id] = state.accountDailyValues[id].filter(x => isPastOrToday(x.date));
+  }
 }
 
 // ── Brokerage-specific normalizers (observed response field names) ─
@@ -1072,15 +1114,20 @@ function periodFramesFromSeries(dv) {
 // We treat anything that looks like an external deposit/withdrawal/transfer/
 // rollover/distribution as a cash flow. Internal market activity (buys/sells/
 // dividends/interest reinvested in the account) is NOT a cash flow.
-const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|ACH|WIRE|RMTC|FUND)$/;
-const CASH_FLOW_DESC_RE = /\bDEPOSIT|WITHDRAW|TRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL ENTRY|\bJNL\b|ACH IN|ACH OUT|WIRE/i;
+const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN)$/;
+const CASH_FLOW_DESC_RE = /\bDEPOSIT\b|\bWITHDRAW|\bTRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL|\bJNL\b|\bACH\b|\bWIRE\b|FUNDING|REDEMPTION/i;
+const SECURITIES_TRADE_TYPE_RE = /^(BUY|BOT|BUYTOOPEN|BUYTOCLOSE|SELL|SLD|SELLTOOPEN|SELLTOCLOSE|DIV|DIVIDEND|INT|INTEREST|FEE|COMM|EXCH|TAX|SPLIT|MERG)$/;
 
 function isCashFlow(txn) {
   if (!txn) return false;
   const t = (txn.type || '').toUpperCase().trim();
   const d = (txn.description || '');
   if (CASH_FLOW_TYPE_RE.test(t)) return true;
-  return CASH_FLOW_DESC_RE.test(d);
+  if (CASH_FLOW_DESC_RE.test(d)) return true;
+  // Heuristic: a transaction with no symbol and a non-zero amount that
+  // isn't a known securities-trade type is likely an external cash flow.
+  if (!txn.symbol && txn.amount != null && txn.amount !== 0 && !SECURITIES_TRADE_TYPE_RE.test(t)) return true;
+  return false;
 }
 
 function modifiedDietzReturn(series, transactions, periodStart) {
@@ -1425,6 +1472,21 @@ function renderOverview() {
   const p = state.overviewChartPeriod || 'ytd';
   const hasDailyData = dv.length >= 2;
 
+  // Determine how much history we have so we can show period tabs only when
+  // they'd actually produce a visible change. Brokerages typically deliver
+  // ~25 days at a time; without longer history, All/1Y/YTD/1M all render
+  // the same series, which feels like the buttons "do nothing."
+  let dataSpanDays = 0;
+  if (hasDailyData) {
+    const first = parseDateLoose(dv[0].date);
+    const last  = parseDateLoose(dv[dv.length - 1].date);
+    if (first && last) dataSpanDays = Math.round((last - first) / 86400000);
+  }
+  const showPeriodTabs = dataSpanDays > 31;  // need >1 month of data for periods to differ
+  const dateRangeLabel = hasDailyData
+    ? `${fmtDateShort(dv[0].date)} – ${fmtDateShort(dv[dv.length - 1].date)}`
+    : '';
+
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
@@ -1456,20 +1518,22 @@ function renderOverview() {
         </div>` : ''}
       </div>
 
-      <h3 class="mf-section-title">Value Over Time</h3>
+      <h3 class="mf-section-title">Value Over Time ${dateRangeLabel ? `<span class="mf-hint">${escHtml(dateRangeLabel)}</span>` : ''}</h3>
       <div class="mf-vot-container">
         <div class="mf-vot-left" id="mf-vot-stats">
           <div class="mf-vot-empty">Waiting for data…</div>
         </div>
         <div class="mf-vot-right">
+          ${showPeriodTabs ? `
           <div class="mf-chart-period-bar">
             ${['all','1y','ytd','1m'].map(id => {
               const labels = { all: 'All', '1y': '1 Year', ytd: 'YTD', '1m': '1 Month' };
               return `<button class="mf-chart-period${p === id ? ' active' : ''}" data-chart-period="${id}">${labels[id]}</button>`;
             }).join('')}
           </div>
+          ` : ''}
           <canvas id="mf-overview-chart" style="width:100%;display:block;height:220px"></canvas>
-          ${!hasDailyData ? `<p class="mf-note" style="margin-top:8px">Waiting for LPL's Value Over Time data — it loads automatically from the same page. If this persists after 10 seconds, try scrolling down on the LPL page to trigger their chart section.</p>` : ''}
+          ${!hasDailyData ? `<p class="mf-note" style="margin-top:8px">Waiting for daily value history — it loads automatically once your brokerage's Overview page has been open. If this persists after 10 seconds, try scrolling down to trigger the brokerage's chart section.</p>` : ''}
         </div>
       </div>
 
@@ -2626,14 +2690,6 @@ function drawOverviewChart() {
     ctx.font = 'bold 9px system-ui';
     ctx.textAlign = 'center';
     ctx.fillText('$', x, markerY + 3);
-  }
-
-  // Date range label (bottom-left, so period tab changes are visible even when data is the same)
-  if (series.length >= 2) {
-    ctx.fillStyle = '#475569';
-    ctx.font = '10px system-ui';
-    ctx.textAlign = 'left';
-    ctx.fillText(`${fmtDateShort(series[0].date)} – ${fmtDateShort(series[series.length - 1].date)}`, pad.left, H - 4);
   }
 
   // Legend (top right of chart area)
