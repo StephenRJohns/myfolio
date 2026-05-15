@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.9';
+const MF_VERSION = 'v1.4.10';
 
 const state = {
   accounts: [],
@@ -103,14 +103,14 @@ function safeStorageRemove(keys) {
 
 // Load persisted data from storage on startup
 const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const CACHE_SCHEMA_VERSION = 3;  // bump to invalidate older cached series
-safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cacheSchemaVersion'], (result) => {
+const CACHE_SCHEMA_VERSION = 4;  // bump to invalidate older cached series
+safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
   if (times.length) state.avgLoadMs = times.reduce((a, b) => a + b, 0) / times.length;
 
-  // Invalidate cached series written by a prior schema (e.g. before the v>0 filter)
+  // Invalidate cached series written by a prior schema
   if (result.cacheSchemaVersion !== CACHE_SCHEMA_VERSION) {
-    safeStorageRemove(['cachedDailyValues', 'cachedAccountDailyValues']);
+    safeStorageRemove(['cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds']);
     safeStorageSet({ cacheSchemaVersion: CACHE_SCHEMA_VERSION });
     dbg('info', 'Daily-value cache cleared (schema upgrade)');
     return;
@@ -126,6 +126,14 @@ safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'c
   if (adv && adv.data && (Date.now() - (adv.savedAt || 0)) < DAILY_VALUES_TTL) {
     state.accountDailyValues = adv.data;
     dbg('info', `Restored per-account daily values from cache`);
+  }
+  // Restore which account IDs LPL natively delivered. Critical for the
+  // synthesis eviction logic to work correctly when account-vot doesn't run
+  // this session (e.g. when the user lands directly on /web/activity).
+  const lid = result.cachedLplProvidedIds;
+  if (lid && Array.isArray(lid.ids) && (Date.now() - (lid.savedAt || 0)) < DAILY_VALUES_TTL) {
+    state.lplProvidedAccountIds = new Set(lid.ids);
+    dbg('info', `Restored LPL-provided account ids from cache: [${lid.ids.join(', ')}]`);
   }
 });
 
@@ -225,9 +233,13 @@ window.addEventListener('message', (event) => {
     const topKeys = data && typeof data === 'object' ? Object.keys(data) : [];
     dbg('info', `JSON body parsed`, { url, topKeys, type: Array.isArray(data) ? `array[${data.length}]` : typeof data });
     parseApiResponse(url, data);
-    // Save account-vot request so we can replay it proactively on future page loads
-    if (url.toLowerCase().includes('account-vot')) {
+    const lc = url.toLowerCase();
+    // Save endpoint URLs we want to replay on future page loads
+    if (lc.includes('account-vot')) {
       safeStorageSet({ accountVotRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
+    }
+    if (lc.includes('activity') && !lc.includes('intraday')) {
+      safeStorageSet({ activityHistoryRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
     }
   } else if (msg.type === 'MF_WS_OPEN') {
     dbg('warn', `WebSocket opened — data may flow through this`, { url: msg.url });
@@ -338,11 +350,14 @@ function parseApiResponse(url, data) {
         if (!existing.has(key(t))) { existing.set(key(t), t); added++; }
       }
       state.transactions = Array.from(existing.values());
-      dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, harvested[0]);
-      // Save the URL so we can replay it on future page loads, just like
-      // we do for account-vot — this is how the chart becomes "self-healing"
-      // after a single visit to the Activity page.
-      safeStorageSet({ activityHistoryRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
+      // Diagnostic: count unique transaction types so we can see which codes
+      // the brokerage uses for cash flows. Lands in the Debug tab for tuning.
+      const typeCounts = {};
+      for (const t of harvested) {
+        const k = String(t.type || '').trim() || '(empty)';
+        typeCounts[k] = (typeCounts[k] || 0) + 1;
+      }
+      dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, { typeCounts, sample: harvested[0] });
       // Re-synthesize accounts now that we may have the missing cash flows
       if (state.dailyValues.length) synthesizeMissingAccountDailies();
       refreshOverlay();
@@ -484,6 +499,7 @@ function parseApiResponse(url, data) {
         safeStorageSet({
           cachedDailyValues: { data: state.dailyValues, savedAt: now },
           cachedAccountDailyValues: { data: state.accountDailyValues, savedAt: now },
+          cachedLplProvidedIds: { ids: Array.from(state.lplProvidedAccountIds || []), savedAt: now },
         });
       } else {
         dbg('info', 'account-vot: no dailyValues (may need a longer date range)', { perAccount: acctDiag });
@@ -584,15 +600,16 @@ function backfillAccountValues() {
 function synthesizeMissingAccountDailies() {
   if (!state.dailyValues.length || !state.accounts.length) return;
 
-  // First, evict any previously-synthesized per-account series. These would
-  // otherwise cause the function to short-circuit on re-runs (e.g. after
-  // activity-history arrives with new cash flows that would change the
-  // synthesis). The "natural" series from account-vot are protected via
-  // state.lplProvidedAccountIds.
-  state.lplProvidedAccountIds = state.lplProvidedAccountIds || new Set();
-  for (const id of Object.keys(state.accountDailyValues || {})) {
-    if (!state.lplProvidedAccountIds.has(id)) {
-      delete state.accountDailyValues[id];
+  // Evict previously-synthesized per-account series so they can be re-done
+  // with whatever cash flows have arrived. ONLY when state.lplProvidedAccountIds
+  // is populated — if it's still empty (e.g., we restored from cache but
+  // account-vot hasn't run yet this session), eviction would wipe legitimate
+  // native data and force everything to flat-line. Better to wait.
+  if (state.lplProvidedAccountIds && state.lplProvidedAccountIds.size > 0) {
+    for (const id of Object.keys(state.accountDailyValues || {})) {
+      if (!state.lplProvidedAccountIds.has(id)) {
+        delete state.accountDailyValues[id];
+      }
     }
   }
 
@@ -1225,12 +1242,22 @@ function periodFramesFromSeries(dv) {
 const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN|ACH FUNDS|BENEFICIARY|JOURNAL)$/;
 const CASH_FLOW_DESC_RE = /\bDEPOSIT\b|\bWITHDRAW|\bTRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL|\bJNL\b|\bACH\b|\bWIRE\b|FUNDING|REDEMPTION|BENEFICIARY|DEATH DISTRIBUTION|FR A\/C|TO A\/C/i;
 const SECURITIES_TRADE_TYPE_RE = /^(BUY|BOT|BUYTOOPEN|BUYTOCLOSE|SELL|SLD|SELLTOOPEN|SELLTOCLOSE|DIV|DIVIDEND|INT|INTEREST|FEE|COMM|EXCH|TAX|SPLIT|MERG)$/;
-const TRANSFER_TYPE_RE = /^(BENEFICIARY|JOURNAL|JNL|JI|JO|JOI|XFR|XFRI|XFRO|TF|TFI|TFO|ROL|ROLI|ROLO|ACH|ACH FUNDS|WIRE)$/;
+// Cash-sweep symbol patterns. The brokerage uses these for the insured cash
+// account product. Sweep transactions (LPL type "mms") are INTERNAL — they
+// offset every external journal/ACH with an equal-and-opposite entry, so
+// counting them would double-count with the wrong sign. Excluded explicitly.
+const CASH_SWEEP_SYMBOL_RE = /^(9999\d+|INSCASH)$/i;
+const SWEEP_TYPE_RE = /^(MMS|MM|SWEEP)$/;
 
 function isCashFlow(txn) {
   if (!txn) return false;
   const t = (txn.type || '').toUpperCase().trim();
   const d = (txn.description || '');
+  // Explicit exclusion: cash-sweep records are internal accounting offsets,
+  // not external flows. Check first so they don't slip through later rules.
+  if (SWEEP_TYPE_RE.test(t)) return false;
+  if (CASH_SWEEP_SYMBOL_RE.test(String(txn.symbol || ''))) return false;
+  // Recognised cash-flow types or descriptions
   if (CASH_FLOW_TYPE_RE.test(t)) return true;
   if (CASH_FLOW_DESC_RE.test(d)) return true;
   // Heuristic: a transaction with no symbol and a non-zero amount that
