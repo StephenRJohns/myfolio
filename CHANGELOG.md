@@ -6,6 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.5.1] — 2026-05-15
+
+### Fixed
+- Period returns (MTD/YTD/1Y) no longer ignore in-kind security transfers (CDW / beneficiary distributions). `modifiedDietzReturn` was using `txn.amount` directly, which is zero for share transfers. It now uses `cashFlowImpact()` — the same function synthesis already used — which estimates value from `quantity × price` when amount is absent.
+- Growth of $10,000 chart has the same fix: `buildTwrSeries` was also using raw `amount`, so deposited shares were never stripped from the chart's growth curve.
+- Both functions already had the UTC/local timezone normalization (`dayOf()`) from v1.5.0 post-release fixes; this patch completes the fix by also correcting the zero-amount skip.
+
+### Changed
+- Status bar hidden-account notice is now inline: `4 accounts (2 $0/closed hidden)` replaces the previous asterisk + footnote pattern.
+- Help `?` button is amber (#f59e0b) to match the Debug tab color.
+
+---
+
+## [1.5.0] — 2026-05-15
+
+### Added
+- **Custom date range** on the Overview Value Over Time chart — a fifth period tab opens a start/end date popover with Apply/Cancel buttons. Supports any sub-window within captured history.
+- Period tabs now always render when any daily history is present (removed the ">31 days of captured data" guard that hid them for recently-opened accounts).
+- `overviewChartCustomStart`, `overviewChartCustomEnd`, `overviewChartCustomPickerOpen` state fields.
+
+### Fixed
+- UTC/local timezone mismatch in `modifiedDietzReturn` and `buildTwrSeries`: transactions timestamped in UTC (e.g. `T07:00:00.000Z`) were compared directly against local-midnight daily-value entries (`T00:00:00`), causing same-day cash flows to fall outside the period window. Both functions now use `dayOf()` calendar-day normalization, matching the pattern synthesis already used.
+- Performance tab Period Returns table no longer shows all dashes when history is shorter than the full period. Brokerage-provided returns from `state.performance` are used as a fallback when Modified Dietz can't compute a value.
+
+### Changed
+- Yahoo Finance (`query1/query2.finance.yahoo.com`) added as an automatic fallback when Stooq is unreachable (VPN, corporate firewall, ad-block). All legal documents (TERMS, PRIVACY, DISCLAIMER, NOTICE) updated to disclose this second data source.
+- Period Returns table extended to show 3-Year and 5-Year columns (— when history is insufficient).
+- `prompts/store-listing.md` added — Chrome Web Store listing copy, permission justifications, and submission checklist.
+- `prompts/rebuild.md` added — comprehensive AI rebuild prompt capturing full architecture, data flow, state schema, UI design spec, and legal requirements.
+- `SITEMAP.md` added — quick reference for every file in the repository.
+- README and HOW-TO updated for Chrome Web Store as primary install method, Yahoo Finance disclosure, and Custom date range feature.
+
+---
+
+## [1.4.0 – 1.4.19] — 2026-05-15
+
+### Added
+- **Account history reconstruction** (`synthesizeMissingAccountDailies`): when the brokerage returns no daily-value series for an account (e.g. a rollover or beneficiary account), MyFolio reconstructs the series by walking captured cash-flow transactions backwards from today's balance. Requires the user to visit the Activity page once per session.
+- **Activity-history endpoint parser**: captures deposits and transfers from the brokerage's activity-process URL so reconstruction has the data it needs.
+- **Proactive VoT replay**: after page load, MyFolio replays the last captured Value-Over-Time request to ensure the daily series is always populated even when the user doesn't start on the Overview page.
+- **Yahoo Finance fallback** (v1.4.9): when Stooq is unreachable, benchmark price history automatically retries with `query1.finance.yahoo.com` (then `query2` if that also fails).
+- Activity-history transactions persisted to `chrome.storage.local` across page reloads (v1.4.15) so the CDW/deposit data survives without revisiting the Activity page.
+- `cashFlowImpact()` helper: estimates dollar value of in-kind security transfers (`quantity × current price`) when the API-level `amount` field is zero.
+- Recognized new cash-flow type codes: `CDW` (custody distribution withdrawal / beneficiary share transfer), `CDI/CDIN/CDOUT`, `RECCV`, `XFRSEC` (v1.4.17).
+
+### Changed
+- `classifyPosition()` now prefers granular broker fields (`broadAssetClass`, `assetCategory`, `subAssetClass`) over the generic `investmentType` wrapper, with text-inference fallback across 8 categories when broker fields are absent.
+- Allocation donut groups strictly by asset class with no top-N truncation.
+- Service-worker messaging switched from one-shot `sendMessage` to a persistent `chrome.runtime.connect` port to keep the worker alive during benchmark fetches.
+- `isCashFlow()` extended with additional type codes; sweep transactions excluded from cash-flow classification.
+- Synthesis uses calendar-day comparison (`dayOf()`) so UTC-timestamped transactions match local-midnight daily-value entries on the same calendar date (v1.4.19).
+- `mf-partial-chart` banner added when one or more accounts are flat-lined due to missing history (v1.4.3); disclosed honestly with account names and instructions.
+
+### Fixed
+- Growth of $10,000 chart legend overlapped when multiple benchmarks were selected.
+- Loading overlay now displays correctly when toggling benchmarks.
+- `ReferenceError: method is not defined` in the activity-history URL persistence path.
+- Service-worker "disconnected port" error after a resolved fetch is silenced.
+- Stooq fetch failures caused by missing `https://*.stooq.com/*` host permission (v1.4.3).
+- Synthesized accounts that received zero-value daily-value entries no longer collapse the portfolio aggregate to zero (v1.4.18).
+- Transaction `accountId` attribution corrected so CDW rows are associated with the receiving account (v1.4.12).
+- Sweep transactions excluded from cash-flow classification to prevent spurious small-amount corrections (v1.4.10).
+
+---
+
+## [1.3.1] — 2026-05-15
+
+### Added
+- **Value Over Time panel** on the Overview tab: left-side stats (Starting Market Value / Deposits & Withdrawals / Investment Returns / Ending Market Value) and a canvas chart with a blue value line, orange dotted invested-capital line, `$` cash-flow markers, period tabs (All / 1Y / YTD / 1M), and a date-range label.
+- Allocation donut redesigned: larger ring, new color palette (blue/slate/green/orange/purple), HTML legend table (Asset / Value / Percent) with clickable rows for asset-class filtering identical to slice clicks.
+- Clickable Positions KPI card (navigates to Holdings tab).
+
+### Fixed
+- `fmtDateShort` now renders "May 14" (month+day) instead of "May 26" (month+year), eliminating spurious "future date" display on Value Over Time and Performance charts.
+- Zero-balance new accounts no longer collapse the aggregate daily-value series to zero.
+- MTD / 1Y / YTD KPI cards always render, showing — when data is unavailable.
+- `interceptor.js` now captures request method and body for proactive VoT replay.
+- `totalAccountValue` promoted to first priority in `ACCOUNT_VALUE_FIELDS` to prevent `prvDayMarketValue` from being selected by the heuristic.
+
+---
+
+## [1.2.0] — 2026-05-15
+
+### Added
+- **Modified Dietz period returns** — R = (EV − BV − NetFlow) / (BV + Σ Cₙ × Wₙ) — adjusts MTD/YTD/1Y for deposits, withdrawals, and transfers. Falls back to simple series-delta when transactions are unavailable. LPL's own per-account YTD (true TWR) is preferred when present.
+- `parseDateLoose` defensive date parser handles ISO 8601, YYYYMMDD, MM/DD/YYYY, and other formats emitted by the brokerage.
+- **Pagination** on Holdings and Transactions: page-size dropdown (10/25/50/100/All), first/prev/next/last navigation buttons (disabled at boundaries), current-page indicator.
+- **Sortable columns** on all tables: click header to sort ascending; click again for descending. ▲/▼/⇅ arrows indicate active direction. Numeric columns default to descending, text columns to ascending.
+- **Holdings → Transactions drill**: clicking a holdings row navigates to the Transactions tab filtered to that symbol, with a removable Symbol chip in the breadcrumb.
+- **Integrated help drawer**: `?` button in the top bar opens a tab-specific help panel for Overview, Holdings, Transactions, Performance, and Debug. Every panel appends a shared glossary defining MTD, YTD, TWR, Modified Dietz, G/L, cost basis, asset class, ETF, FDIC/SIPC, rollover, IRA types, benchmarks, and more.
+- Version stamp displayed next to the logo so users can verify which build is running after reloading the extension.
+
+---
+
 ## [1.1.0] — 2026-05-15
 
 ### Added

@@ -1613,7 +1613,7 @@ const HELP_CONTENT = {
       <h4>What's shown</h4>
       <ul>
         <li><strong>Portfolio Value Over Time</strong> — your full captured daily-value history, in dollars. Unlike the Overview's chart, this one is not period-filtered.</li>
-        <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. This is the apples-to-apples comparison view.</li>
+        <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. Deposits and withdrawals are stripped out using a daily time-weighted return calculation, so the line shows investment performance only — a large deposit mid-period won't make it spike.</li>
         <li><strong>Period Returns table</strong> — YTD, 1-Year, 3-Year, 5-Year. Your portfolio appears in the highlighted row; benchmarks below it. 3-Year and 5-Year for your portfolio show — unless you have that much daily-value history captured; benchmarks can show them immediately because Stooq returns up to 5 years of price history.</li>
       </ul>
       <h4>Compare Against (benchmark picker)</h4>

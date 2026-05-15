@@ -11,7 +11,7 @@
 // silently when the service worker is suspended mid-fetch — ports explicitly
 // keep the worker alive while the port is open.
 
-console.log('[MyFolio SW] service worker started, build 1.5.0');
+console.log('[MyFolio SW] service worker started, build 1.5.1');
 
 const ALLOWED_HOSTS = [
   /^https:\/\/(?:www\.)?stooq\.com\//i,
