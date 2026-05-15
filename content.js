@@ -6,6 +6,8 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
+const MF_VERSION = 'v1.2.0';
+
 const state = {
   accounts: [],
   positions: [],
@@ -13,8 +15,14 @@ const state = {
   performance: {},
   dailyValues: [],         // [{date, value}] aggregated across accounts
   accountDailyValues: {},  // accountId -> [{date, value}]
-  selectedAccountId: null, // null = view all; 'portfolio' acts the same as null
-  selectedAssetClass: null, // asset-class label set by clicking an allocation slice
+  selectedAccountId: null,    // null = view all; 'portfolio' acts the same as null
+  selectedAssetClass: null,   // asset-class label set by clicking an allocation slice
+  selectedSymbol: null,       // ticker drilled into from a Holdings row
+  helpOpen: false,
+  holdingsPage: 1, holdingsPageSize: 25,
+  holdingsSort: { col: 'value', dir: 'desc' },
+  txnPage: 1, txnPageSize: 25,
+  txnSort: { col: 'date', dir: 'desc' },
   overlayOpen: false,
   apiCallCount: 0,
   lastApiTime: null,
@@ -489,14 +497,22 @@ function buildOverlay() {
   overlay.id = 'mf-overlay';
   overlay.innerHTML = `
     <div class="mf-topbar">
-      <div class="mf-logo">◆ MyFolio</div>
+      <div class="mf-logo">◆ MyFolio <span class="mf-version">${escHtml(MF_VERSION)}</span></div>
       <nav class="mf-nav">
         <button class="mf-tab active" data-tab="overview">Overview</button>
         <button class="mf-tab" data-tab="holdings">Holdings</button>
         <button class="mf-tab" data-tab="transactions">Transactions</button>
         <button class="mf-tab" data-tab="performance">Performance</button>
       </nav>
+      <button class="mf-help-btn" id="mf-help-btn" title="Help for this tab">?</button>
       <button class="mf-close" id="mf-close-btn" title="Close">✕</button>
+    </div>
+    <div class="mf-help-panel mf-hidden" id="mf-help-panel">
+      <div class="mf-help-header">
+        <h3 id="mf-help-title">Help</h3>
+        <button class="mf-help-close" id="mf-help-close" title="Close help">✕</button>
+      </div>
+      <div class="mf-help-body" id="mf-help-body"></div>
     </div>
     <div class="mf-statusbar" id="mf-statusbar">
       <span class="mf-spinner"></span>
@@ -512,12 +528,16 @@ function buildOverlay() {
 
   document.getElementById('mf-close-btn').addEventListener('click', toggleOverlay);
   document.getElementById('mf-reload-btn').addEventListener('click', () => location.reload());
+  document.getElementById('mf-help-btn').addEventListener('click', toggleHelp);
+  document.getElementById('mf-help-close').addEventListener('click', toggleHelp);
   overlay.querySelectorAll('.mf-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       overlay.querySelectorAll('.mf-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.activeTab = btn.dataset.tab;
       renderContent();
+      // Keep the help panel in sync with the current tab if it's open
+      if (state.helpOpen) renderHelpPanel();
     });
   });
 
@@ -525,31 +545,72 @@ function buildOverlay() {
   const bodyEl = document.getElementById('mf-body');
   if (bodyEl) {
     bodyEl.addEventListener('click', (e) => {
-      if (e.target.closest('#mf-back-all')) {
-        state.selectedAccountId = null;
+      // Breadcrumb chip clears
+      if (e.target.closest('#mf-back-all'))     { state.selectedAccountId = null; renderContent(); return; }
+      if (e.target.closest('#mf-clear-class'))  { state.selectedAssetClass = null; renderContent(); return; }
+      if (e.target.closest('#mf-clear-symbol')) { state.selectedSymbol = null;     renderContent(); return; }
+
+      // Pagination button
+      const pager = e.target.closest('.mf-pager');
+      if (pager) {
+        handlePagerClick(pager.dataset.scope, pager.dataset.page);
+        return;
+      }
+
+      // Sortable column header
+      const sortHeader = e.target.closest('th.mf-sortable[data-col]');
+      if (sortHeader) {
+        handleSortClick(sortHeader.dataset.scope, sortHeader.dataset.col);
+        return;
+      }
+
+      // Holdings row → drill into a single symbol
+      const row = e.target.closest('.mf-row-clickable[data-symbol]');
+      if (row && row.dataset.symbol) {
+        state.selectedSymbol = row.dataset.symbol;
+        state.txnPage = 1;
+        if (state.activeTab !== 'transactions') {
+          state.activeTab = 'transactions';
+          document.querySelectorAll('.mf-tab').forEach(b => {
+            b.classList.toggle('active', b.dataset.tab === 'transactions');
+          });
+        }
         renderContent();
         return;
       }
-      if (e.target.closest('#mf-clear-class')) {
-        state.selectedAssetClass = null;
-        renderContent();
-        return;
-      }
+
+      // Account card → filter (Total Portfolio card resets)
       const card = e.target.closest('.mf-account-card[data-acct-id]');
       if (card) {
         const id = card.dataset.acctId;
         if (id === 'portfolio') {
-          // Clicking the Total Portfolio card clears any active filter
           state.selectedAccountId = null;
           state.selectedAssetClass = null;
+          state.selectedSymbol = null;
         } else {
           state.selectedAccountId = id;
         }
+        state.holdingsPage = 1; state.txnPage = 1;
         renderContent();
       }
     });
+    bodyEl.addEventListener('change', (e) => {
+      const ps = e.target.closest('.mf-pagesize');
+      if (!ps) return;
+      const scope = ps.dataset.scope;
+      const v = ps.value === 'all' ? 'all' : parseInt(ps.value, 10);
+      if (scope === 'holdings') { state.holdingsPageSize = v; state.holdingsPage = 1; }
+      else if (scope === 'txn') { state.txnPageSize = v; state.txnPage = 1; }
+      renderContent();
+    });
     bodyEl.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
+      const sortHeader = e.target.closest('th.mf-sortable[data-col]');
+      if (sortHeader) {
+        e.preventDefault();
+        handleSortClick(sortHeader.dataset.scope, sortHeader.dataset.col);
+        return;
+      }
       const card = e.target.closest('.mf-account-card[data-acct-id]');
       if (card) {
         e.preventDefault();
@@ -557,8 +618,24 @@ function buildOverlay() {
         if (id === 'portfolio') {
           state.selectedAccountId = null;
           state.selectedAssetClass = null;
+          state.selectedSymbol = null;
         } else {
           state.selectedAccountId = id;
+        }
+        state.holdingsPage = 1; state.txnPage = 1;
+        renderContent();
+        return;
+      }
+      const row = e.target.closest('.mf-row-clickable[data-symbol]');
+      if (row && row.dataset.symbol) {
+        e.preventDefault();
+        state.selectedSymbol = row.dataset.symbol;
+        state.txnPage = 1;
+        if (state.activeTab !== 'transactions') {
+          state.activeTab = 'transactions';
+          document.querySelectorAll('.mf-tab').forEach(b => {
+            b.classList.toggle('active', b.dataset.tab === 'transactions');
+          });
         }
         renderContent();
       }
@@ -692,7 +769,12 @@ function filteredPositions() {
 
 function filteredTransactions() {
   const acct = getSelectedAccount();
-  return acct ? state.transactions.filter(t => t.accountId === acct.id) : state.transactions;
+  let txns = acct ? state.transactions.filter(t => t.accountId === acct.id) : state.transactions;
+  if (state.selectedSymbol) {
+    const sym = state.selectedSymbol.toUpperCase();
+    txns = txns.filter(t => (t.symbol || '').toUpperCase() === sym);
+  }
+  return txns;
 }
 
 function filteredDailyValues() {
@@ -701,48 +783,322 @@ function filteredDailyValues() {
   return state.dailyValues;
 }
 
+// Defensive date parser: handles ISO, "YYYY-MM-DD", "YYYYMMDD", "MM/DD/YYYY"
+// and falls back to Date.parse. Returns null on failure.
+function parseDateLoose(d) {
+  if (!d) return null;
+  if (d instanceof Date) return isNaN(d) ? null : d;
+  const s = String(d).trim();
+  let dt = new Date(s);
+  if (!isNaN(dt)) return dt;
+  if (/^\d{8}$/.test(s)) {
+    dt = new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`);
+    if (!isNaN(dt)) return dt;
+  }
+  return null;
+}
+
 // Compute MTD / YTD / 1-Year returns from a [{date, value}] series.
 // Returns null for any frame where there isn't enough history.
 function periodFramesFromSeries(dv) {
   if (!dv || dv.length < 2) return { mtd: null, ytd: null, oneY: null };
-  const latest = dv[dv.length - 1];
-  const latestDate = new Date(latest.date);
-  if (isNaN(latestDate)) return { mtd: null, ytd: null, oneY: null };
 
-  const findStart = (predicate) => {
-    // Walk backwards to find the most recent point that satisfies `predicate`
-    // (i.e. the last bar from before the period boundary). Falls back to the
-    // first bar in the series if no prior bar exists.
-    for (let i = dv.length - 1; i >= 0; i--) {
-      if (predicate(new Date(dv[i].date))) return dv[i];
-    }
-    return dv[0];
-  };
-  const pct = s => (s && s.value > 0) ? ((latest.value - s.value) / s.value) * 100 : null;
+  // Pre-parse dates once; drop entries where parsing fails
+  const parsed = dv.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
+                   .filter(d => d.date && d.value != null);
+  if (parsed.length < 2) {
+    dbg('warn', 'periodFramesFromSeries: could not parse enough dates', { sample: dv.slice(0, 3) });
+    return { mtd: null, ytd: null, oneY: null };
+  }
+  const latest = parsed[parsed.length - 1];
+  const latestDate = latest.date;
 
   const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
   const yearStart  = new Date(latestDate.getFullYear(), 0, 1);
   const oneYearAgo = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
 
-  // Only emit MTD when we have a point from before the current month boundary;
-  // otherwise it's the same as ITD for that account and is misleading.
-  const firstDate = new Date(dv[0].date);
-  const mtd  = firstDate < monthStart ? pct(findStart(d => d < monthStart)) : null;
-  const ytd  = firstDate < yearStart  ? pct(findStart(d => d < yearStart))  : null;
-  const oneY = firstDate <= oneYearAgo ? pct(findStart(d => d <= oneYearAgo)) : null;
-  return { mtd, ytd, oneY };
+  // Walk backwards to find the latest bar STRICTLY BEFORE the boundary date.
+  // If no such bar exists, returns null (period is unknowable).
+  const findBaseline = (boundary) => {
+    for (let i = parsed.length - 1; i >= 0; i--) {
+      if (parsed[i].date < boundary) return parsed[i];
+    }
+    return null;
+  };
+  const pct = s => (s && s.value > 0) ? ((latest.value - s.value) / s.value) * 100 : null;
+
+  return {
+    mtd:  pct(findBaseline(monthStart)),
+    ytd:  pct(findBaseline(yearStart)),
+    oneY: pct(findBaseline(oneYearAgo)),
+  };
+}
+
+// ── Modified Dietz return ─────────────────────────────────────────────────────
+// True time-weighted-ish return that adjusts for cash flows during the period.
+// R = (EV - BV - NetFlow) / (BV + Σ Cn × Wn)
+// where Wn = (totalDays − daysSincePeriodStart) / totalDays.
+//
+// We treat anything that looks like an external deposit/withdrawal/transfer/
+// rollover/distribution as a cash flow. Internal market activity (buys/sells/
+// dividends/interest reinvested in the account) is NOT a cash flow.
+const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|ACH|WIRE|RMTC|FUND)$/;
+const CASH_FLOW_DESC_RE = /\bDEPOSIT|WITHDRAW|TRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL ENTRY|\bJNL\b|ACH IN|ACH OUT|WIRE/i;
+
+function isCashFlow(txn) {
+  if (!txn) return false;
+  const t = (txn.type || '').toUpperCase().trim();
+  const d = (txn.description || '');
+  if (CASH_FLOW_TYPE_RE.test(t)) return true;
+  return CASH_FLOW_DESC_RE.test(d);
+}
+
+function modifiedDietzReturn(series, transactions, periodStart) {
+  if (!series || series.length < 2) return null;
+  const parsed = series.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
+                       .filter(d => d.date && d.value != null);
+  if (parsed.length < 2) return null;
+  const latest = parsed[parsed.length - 1];
+
+  // Find the baseline: the latest bar strictly before periodStart.
+  let bvBar = null;
+  for (let i = parsed.length - 1; i >= 0; i--) {
+    if (parsed[i].date < periodStart) { bvBar = parsed[i]; break; }
+  }
+  if (!bvBar) return null;
+  const BV = bvBar.value;
+  const startDate = bvBar.date;
+  const endDate = latest.date;
+  const totalDays = (endDate - startDate) / 86400000;
+  if (BV <= 0 || totalDays < 1) return null;
+
+  let netFlow = 0;
+  let weightedFlow = 0;
+  for (const txn of transactions || []) {
+    if (!isCashFlow(txn)) continue;
+    const td = parseDateLoose(txn.date);
+    if (!td) continue;
+    if (td < startDate || td > endDate) continue;
+    const C = txn.amount || 0;
+    if (C === 0) continue;
+    const daysSinceStart = (td - startDate) / 86400000;
+    const W = (totalDays - daysSinceStart) / totalDays;
+    netFlow += C;
+    weightedFlow += C * W;
+  }
+
+  const denominator = BV + weightedFlow;
+  if (denominator <= 0) return null;
+  return ((latest.value - BV - netFlow) / denominator) * 100;
+}
+
+// Compute MTD / YTD / 1Y using Modified Dietz, falling back to simple
+// series-delta when there aren't enough transactions to bother. Note: LPL's
+// own per-account PeriodTotalReturn (true TWR) is still preferred — this
+// function provides MTD and 1Y, plus a YTD fallback if LPL didn't supply one.
+function periodFramesAccurate(series, transactions) {
+  if (!series || series.length < 2) return { mtd: null, ytd: null, oneY: null };
+  const parsed = series.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
+                       .filter(d => d.date && d.value != null);
+  if (parsed.length < 2) return { mtd: null, ytd: null, oneY: null };
+  const latestDate = parsed[parsed.length - 1].date;
+  const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
+  const yearStart  = new Date(latestDate.getFullYear(), 0, 1);
+  const oneYearAgo = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+
+  const simple = periodFramesFromSeries(series);
+  const txns = transactions || [];
+
+  const md = (start, fallback) => {
+    const r = modifiedDietzReturn(series, txns, start);
+    return r != null ? r : fallback;
+  };
+  return {
+    mtd:  md(monthStart, simple.mtd),
+    ytd:  md(yearStart, simple.ytd),
+    oneY: md(oneYearAgo, simple.oneY),
+  };
+}
+
+// ── Tab-specific help content ────────────────────────────────────────────────
+const HELP_CONTENT = {
+  overview: {
+    title: 'Overview tab',
+    body: `
+      <p>The Overview is your starting point. It summarizes your whole portfolio (or one drilled-into account) and lets you slice your data with one click.</p>
+      <h4>What each KPI shows</h4>
+      <ul>
+        <li><strong>Total Portfolio Value</strong> — current market value plus today's $ and % change.</li>
+        <li><strong>MTD / YTD / 1-Year Return</strong> — period returns computed with the <em>Modified Dietz</em> formula, which adjusts for deposits, withdrawals, and transfers during the period. LPL's own per-account YTD (true time-weighted return) is preferred when available. A frame only appears when enough history is captured to compute it.</li>
+        <li><strong>Positions</strong> — number of holdings visible after the current filter.</li>
+      </ul>
+      <h4>Account cards</h4>
+      <ul>
+        <li><strong>Click any account card</strong> to filter the entire dashboard (Overview, Holdings, Transactions, Performance) to just that account.</li>
+        <li>The <strong>Total Portfolio</strong> card acts as a reset — clicking it clears every active filter.</li>
+        <li>Accounts with $0 balance and no activity (e.g. closed/transfer-only accounts) are hidden automatically. The status bar shows an asterisk + footnote indicating how many are hidden.</li>
+      </ul>
+      <h4>Allocation donut</h4>
+      <ul>
+        <li>Slices are grouped strictly by <strong>asset class</strong>.</li>
+        <li><strong>Click a slice</strong> to filter the Holdings tab to that class and jump there. Click the same slice again to clear.</li>
+      </ul>
+    `,
+  },
+  holdings: {
+    title: 'Holdings tab',
+    body: `
+      <p>Every position you currently hold, with allocation %, unrealized gain/loss, and a donut chart of category weights.</p>
+      <h4>Working with the table</h4>
+      <ul>
+        <li><strong>Click any column header</strong> to sort by that column. Click the same header again to flip ascending ↔ descending. ▲ / ▼ shows the active sort direction.</li>
+        <li><strong>Click any row</strong> to drill into that symbol — you'll jump to the Transactions tab filtered to that ticker.</li>
+        <li>Use the <strong>page-size dropdown</strong> at the top of the table to control how many rows show at once. Page through with ⏮ ◀ ▶ ⏭. Buttons disable at the first and last page.</li>
+      </ul>
+      <h4>Filters</h4>
+      <ul>
+        <li>Active filters (account, asset class, symbol) show as chips at the top. Click any × to clear one independently.</li>
+        <li>The donut still shows the full account context even when an asset-class filter is active, so you don't lose your bearings.</li>
+      </ul>
+    `,
+  },
+  transactions: {
+    title: 'Transactions tab',
+    body: `
+      <p>Every captured activity — buys, sells, dividends, deposits, withdrawals, fees, journal entries.</p>
+      <h4>Reading the rows</h4>
+      <ul>
+        <li><strong>Type</strong> is the brokerage's transaction code; the small colored badge marks it for quick scanning.</li>
+        <li><strong>Amount</strong> sign convention: positive = money into the account (deposit, sell proceeds, dividend), negative = money out (buy, withdrawal, fee).</li>
+      </ul>
+      <h4>Sorting & paging</h4>
+      <ul>
+        <li>Every column is sortable. Default sort is by date descending (most recent first).</li>
+        <li>Page-size and navigation controls work just like the Holdings tab.</li>
+      </ul>
+      <h4>Drilling in</h4>
+      <ul>
+        <li>You can land here filtered to a single symbol by clicking a row on the Holdings tab, or filtered to a single account by clicking an account card on Overview. Active filters are removable chips at the top.</li>
+      </ul>
+    `,
+  },
+  performance: {
+    title: 'Performance tab',
+    body: `
+      <p>Long-form return analysis. Use this to answer "how have I actually done" beyond today's change.</p>
+      <h4>What's shown</h4>
+      <ul>
+        <li><strong>Portfolio Value Over Time</strong> — your daily portfolio value as captured from LPL.</li>
+        <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. This is the apples-to-apples comparison view.</li>
+        <li><strong>Period Returns table</strong> — YTD, 1-Year, 3-Year, 5-Year. Your portfolio appears in the highlighted row; benchmarks below it.</li>
+      </ul>
+      <h4>Benchmarks</h4>
+      <ul>
+        <li>Pick from 10 ETFs covering broad equity, international, bonds, real estate, and gold. Selections persist across sessions.</li>
+        <li>Price data is fetched from <code>stooq.com</code> and cached for 24 hours. The only thing sent is the ticker symbol and date range — no personal data.</li>
+        <li>Benchmark returns are computed from price change only (no dividend reinvestment), so for SPY/VTI they will read slightly lower than total-return figures you'd see on Morningstar. For informational purposes only.</li>
+      </ul>
+      <h4>About the math</h4>
+      <ul>
+        <li>Your portfolio returns are computed from LPL's daily-value series. For periods with large deposits/withdrawals, MyFolio uses Modified Dietz on the Overview KPIs; the Performance tab uses simple period delta as a faster approximation. Always cross-check against your official statements before acting.</li>
+      </ul>
+    `,
+  },
+  debug: {
+    title: 'Debug tab',
+    body: `
+      <p>The hidden debug tab — reachable by triple-tapping <kbd>Shift</kbd> — shows every API call MyFolio has seen, in order, with full JSON detail when available.</p>
+      <h4>When to use it</h4>
+      <ul>
+        <li>Something looks wrong (a missing value, a misclassified asset, an account that didn't appear).</li>
+        <li>You want to file a bug or request a fix. Click <strong>⎘ Copy for Claude</strong> to package the log for pasting into a chat or GitHub issue.</li>
+        <li>Click <strong>↺ Reload page</strong> to re-trigger the LPL API calls and capture fresh data.</li>
+      </ul>
+      <h4>What you'll see</h4>
+      <ul>
+        <li>Successful captures (✔), informational events (●), warnings (▲), and errors (✖).</li>
+        <li>When MyFolio can't recognize a field name (for example an account's value field), it dumps all the available keys here so we can update the parser to handle your brokerage's shape.</li>
+      </ul>
+    `,
+  },
+};
+
+// Shared glossary — appended to every help panel. Plain-English definitions
+// for acronyms and finance terms that appear in MyFolio. (Ticker symbols are
+// excluded — those are looked up by clicking through to the brokerage.)
+const HELP_GLOSSARY = `
+  <h4>Glossary & acronyms</h4>
+  <dl class="mf-glossary">
+    <dt>Day change</dt><dd>Change in market value since yesterday's close, in dollars and percent.</dd>
+    <dt>MTD</dt><dd>Month-to-Date — return from the first day of the current calendar month through today.</dd>
+    <dt>QTD</dt><dd>Quarter-to-Date — return from the start of the current calendar quarter through today.</dd>
+    <dt>YTD</dt><dd>Year-to-Date — return from January 1 of the current year through today.</dd>
+    <dt>1Y / 3Y / 5Y / 10Y</dt><dd>Trailing 1-, 3-, 5-, 10-year returns. Periods longer than one year are typically reported <em>annualized</em> (the constant per-year rate that compounds to the actual total return).</dd>
+    <dt>ITD / SI</dt><dd>Inception-to-Date / Since Inception — return from the date the account was opened through today. Often reported annualized.</dd>
+    <dt>TWR</dt><dd>Time-Weighted Return — the standard "investment performance" number. Eliminates the effect of deposits and withdrawals so you see how the investments themselves performed. Required by GIPS standards.</dd>
+    <dt>MWR / IRR</dt><dd>Money-Weighted Return / Internal Rate of Return — measures the personal return including the timing of your contributions. Different from TWR when cash flows are significant.</dd>
+    <dt>Modified Dietz</dt><dd>An approximation of TWR that adjusts for cash flows weighted by when they occurred during the period. What MyFolio uses for MTD / 1Y when LPL doesn't supply a figure.</dd>
+    <dt>G/L</dt><dd>Gain/Loss — the difference between current market value and your cost basis. <em>Unrealized</em> G/L hasn't been locked in by a sale; <em>realized</em> G/L is from completed trades.</dd>
+    <dt>Cost basis</dt><dd>What you paid (adjusted for splits, reinvestments, fees, etc.). Determines the taxable gain or loss when you sell.</dd>
+    <dt>Allocation</dt><dd>The share of total portfolio value held in a single position or asset class, expressed as a percentage.</dd>
+    <dt>Asset class</dt><dd>A category of investment with similar risk/return characteristics — e.g. cash, fixed income, equities, alternatives. LPL groups holdings into classes like "Mutual Funds, ETPs, and CIs" or "Cash and Cash Equivalents".</dd>
+    <dt>ETF</dt><dd>Exchange-Traded Fund — a basket of securities that trades on an exchange like a stock.</dd>
+    <dt>ETP</dt><dd>Exchange-Traded Product — broader category that includes ETFs plus exchange-traded notes (ETNs), commodity pools, etc.</dd>
+    <dt>CI</dt><dd>Closed-end Investment fund or Collective Investment — a pooled fund traded on an exchange, but with a fixed share count (unlike open-end mutual funds).</dd>
+    <dt>Mutual fund</dt><dd>A pooled investment that issues and redeems shares at end-of-day NAV.</dd>
+    <dt>MMF / Money Market</dt><dd>Money Market Fund — a short-term, very low-risk fund that typically holds Treasury bills, commercial paper, CDs. Often used as a "sweep" for uninvested cash.</dd>
+    <dt>FDIC</dt><dd>Federal Deposit Insurance Corporation — insures bank deposits up to $250,000 per depositor, per institution. Brokerage cash sweeps to FDIC-insured banks carry this coverage; market investments do not.</dd>
+    <dt>SIPC</dt><dd>Securities Investor Protection Corporation — protects brokerage customers up to $500,000 (including $250,000 in cash) if the brokerage fails. Does NOT protect against market losses.</dd>
+    <dt>NAV</dt><dd>Net Asset Value — the per-share value of a fund, computed daily after market close.</dd>
+    <dt>RMD</dt><dd>Required Minimum Distribution — the amount the IRS requires you to withdraw annually from most retirement accounts starting at age 73.</dd>
+    <dt>IRA</dt><dd>Individual Retirement Account — a tax-advantaged personal retirement account (Traditional, Roth, SEP, SIMPLE).</dd>
+    <dt>Roth</dt><dd>A retirement account funded with after-tax dollars; qualified withdrawals are tax-free.</dd>
+    <dt>401(k) / 403(b)</dt><dd>Employer-sponsored retirement plans. Often rolled into an IRA after leaving an employer.</dd>
+    <dt>Rollover</dt><dd>Moving funds from one retirement account to another (e.g. 401(k) → IRA) without triggering tax.</dd>
+    <dt>ACH</dt><dd>Automated Clearing House — the electronic bank-transfer network used for most deposits and withdrawals.</dd>
+    <dt>SAM</dt><dd>Strategic Asset Management — LPL's wrap-fee managed account program. Account names like "SAM - Retirement" indicate the account is in this program.</dd>
+    <dt>LPL</dt><dd>LPL Financial LLC — the broker-dealer hosting your account. The website MyFolio reads (<code>accountview.lpl.com</code>) belongs to them; MyFolio is not affiliated with or endorsed by LPL.</dd>
+    <dt>Wrap account / Advisory account</dt><dd>An account where the advisor charges a single annual fee (a percentage of assets) instead of per-trade commissions.</dd>
+    <dt>Benchmark</dt><dd>A market index used as a reference to measure your portfolio against. SPY tracks the S&amp;P 500; AGG tracks the US bond market; etc.</dd>
+    <dt>Beneficiary</dt><dd>The person or entity who inherits the account if you pass away.</dd>
+  </dl>
+`;
+
+function renderHelpPanel() {
+  const panel = document.getElementById('mf-help-panel');
+  const title = document.getElementById('mf-help-title');
+  const body = document.getElementById('mf-help-body');
+  if (!panel || !title || !body) return;
+  if (!state.helpOpen) {
+    panel.classList.add('mf-hidden');
+    return;
+  }
+  const tab = state.activeTab || 'overview';
+  const content = HELP_CONTENT[tab] || HELP_CONTENT.overview;
+  title.textContent = content.title;
+  body.innerHTML = content.body + HELP_GLOSSARY;
+  panel.classList.remove('mf-hidden');
+}
+
+function toggleHelp() {
+  state.helpOpen = !state.helpOpen;
+  renderHelpPanel();
 }
 
 function renderBreadcrumb() {
   const acct = getSelectedAccount();
   const cls = state.selectedAssetClass;
-  if (!acct && !cls) return '';
+  const sym = state.selectedSymbol;
+  if (!acct && !cls && !sym) return '';
   const chips = [];
   if (acct) {
     chips.push(`<span class="mf-chip">Account: <strong>${escHtml(acct.name)}</strong>${acct.type ? ` · ${escHtml(acct.type)}` : ''} <button class="mf-chip-x" id="mf-back-all" title="Clear account filter">×</button></span>`);
   }
   if (cls) {
     chips.push(`<span class="mf-chip">Asset class: <strong>${escHtml(cls)}</strong> <button class="mf-chip-x" id="mf-clear-class" title="Clear asset-class filter">×</button></span>`);
+  }
+  if (sym) {
+    chips.push(`<span class="mf-chip">Symbol: <strong>${escHtml(sym)}</strong> <button class="mf-chip-x" id="mf-clear-symbol" title="Clear symbol filter">×</button></span>`);
   }
   return `<div class="mf-breadcrumb">${chips.join('')}</div>`;
 }
@@ -787,10 +1143,11 @@ function renderOverview() {
     ytd = state.performance.ytdReturn;
   }
 
-  // MTD / YTD / 1Y computed from the (filtered) daily-value series. If LPL
-  // already gave us a YTD figure on the account we trust that one.
+  // MTD / YTD / 1Y via Modified Dietz on the (filtered) daily-value series +
+  // transactions. LPL's own per-account YTD (true TWR) is preferred where present.
   const dv = filteredDailyValues();
-  const framed = periodFramesFromSeries(dv);
+  const txns = filteredTransactions();
+  const framed = periodFramesAccurate(dv, txns);
   if (ytd == null) ytd = framed.ytd;
   const mtd = framed.mtd;
   const oneY = framed.oneY;
@@ -858,29 +1215,48 @@ function renderHoldings() {
     return `
       <div class="mf-section">
         ${renderBreadcrumb()}
-        <div class="mf-empty">${getSelectedAccount() ? 'No holdings found for this account.' : 'No holdings data captured yet. Navigate to your holdings page.'}</div>
+        <div class="mf-empty">${getSelectedAccount() || state.selectedAssetClass ? 'No holdings match the current filter.' : 'No holdings data captured yet. Navigate to your holdings page.'}</div>
       </div>`;
   }
 
-  const sorted = [...positions].sort((a, b) => (b.value || 0) - (a.value || 0));
-  const total = sorted.reduce((s, p) => s + (p.value || 0), 0);
+  const total = positions.reduce((s, p) => s + (p.value || 0), 0);
+  const accessors = {
+    symbol:   p => p.symbol,
+    name:     p => p.name,
+    quantity: p => p.quantity,
+    price:    p => p.price,
+    value:    p => p.value,
+    alloc:    p => total > 0 ? (p.value / total) * 100 : 0,
+    gl:       p => p.gl,
+    glPct:    p => p.glPct,
+  };
+  const sorted = applySort(positions, 'holdings', accessors);
+  const page = clampPage(state.holdingsPage, sorted.length, state.holdingsPageSize);
+  state.holdingsPage = page; // persist any clamping
+  const slice = pageSlice(sorted, page, state.holdingsPageSize);
 
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
-      <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span></h3>
+      <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a row to see its transactions · click a header to sort</span></h3>
       <canvas id="mf-alloc-chart" width="400" height="220" style="margin-bottom:24px"></canvas>
+      ${renderPaginationBar('holdings', sorted.length, page, state.holdingsPageSize)}
       <table class="mf-table">
         <thead><tr>
-          <th>Symbol</th><th>Name</th><th class="right">Qty</th>
-          <th class="right">Price</th><th class="right">Value</th>
-          <th class="right">Alloc</th><th class="right">G/L</th><th class="right">G/L %</th>
+          ${renderSortableHeader('holdings', 'symbol',   'Symbol')}
+          ${renderSortableHeader('holdings', 'name',     'Name')}
+          ${renderSortableHeader('holdings', 'quantity', 'Qty',   { right: true })}
+          ${renderSortableHeader('holdings', 'price',    'Price', { right: true })}
+          ${renderSortableHeader('holdings', 'value',    'Value', { right: true })}
+          ${renderSortableHeader('holdings', 'alloc',    'Alloc', { right: true })}
+          ${renderSortableHeader('holdings', 'gl',       'G/L',   { right: true })}
+          ${renderSortableHeader('holdings', 'glPct',    'G/L %', { right: true })}
         </tr></thead>
         <tbody>
-          ${sorted.map(p => `
-            <tr>
-              <td class="symbol">${p.symbol}</td>
-              <td class="name">${p.name}</td>
+          ${slice.map(p => `
+            <tr class="mf-row-clickable" data-symbol="${escHtml(p.symbol || '')}" role="button" tabindex="0">
+              <td class="symbol">${escHtml(p.symbol)}</td>
+              <td class="name">${escHtml(p.name)}</td>
               <td class="right">${p.quantity != null ? fmtNum(p.quantity) : '—'}</td>
               <td class="right">${p.price != null ? fmt$(p.price) : '—'}</td>
               <td class="right">${fmt$(p.value)}</td>
@@ -891,7 +1267,7 @@ function renderHoldings() {
           `).join('')}
         </tbody>
         <tfoot><tr>
-          <td colspan="4"><strong>Total</strong></td>
+          <td colspan="4"><strong>Total (all rows)</strong></td>
           <td class="right"><strong>${fmt$(total)}</strong></td>
           <td class="right">100%</td>
           <td colspan="2"></td>
@@ -907,28 +1283,46 @@ function renderTransactions() {
     return `
       <div class="mf-section">
         ${renderBreadcrumb()}
-        <div class="mf-empty">${getSelectedAccount() ? 'No transactions found for this account.' : 'No transaction data captured yet. Navigate to your activity/history page.'}</div>
+        <div class="mf-empty">${getSelectedAccount() || state.selectedSymbol ? 'No transactions match the current filter.' : 'No transaction data captured yet. Navigate to your activity/history page.'}</div>
       </div>`;
   }
 
-  const sorted = [...txns].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const accessors = {
+    date:        t => parseDateLoose(t.date)?.getTime() ?? 0,
+    type:        t => t.type,
+    symbol:      t => t.symbol,
+    description: t => t.description,
+    quantity:    t => t.quantity,
+    price:       t => t.price,
+    amount:      t => t.amount,
+  };
+  const sorted = applySort(txns, 'txn', accessors);
+  const page = clampPage(state.txnPage, sorted.length, state.txnPageSize);
+  state.txnPage = page;
+  const slice = pageSlice(sorted, page, state.txnPageSize);
 
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
-      <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span></h3>
+      <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a header to sort</span></h3>
+      ${renderPaginationBar('txn', sorted.length, page, state.txnPageSize)}
       <table class="mf-table">
         <thead><tr>
-          <th>Date</th><th>Type</th><th>Symbol</th><th>Description</th>
-          <th class="right">Qty</th><th class="right">Price</th><th class="right">Amount</th>
+          ${renderSortableHeader('txn', 'date',        'Date')}
+          ${renderSortableHeader('txn', 'type',        'Type')}
+          ${renderSortableHeader('txn', 'symbol',      'Symbol')}
+          ${renderSortableHeader('txn', 'description', 'Description')}
+          ${renderSortableHeader('txn', 'quantity',    'Qty',    { right: true })}
+          ${renderSortableHeader('txn', 'price',       'Price',  { right: true })}
+          ${renderSortableHeader('txn', 'amount',      'Amount', { right: true })}
         </tr></thead>
         <tbody>
-          ${sorted.map(t => `
+          ${slice.map(t => `
             <tr>
               <td class="date">${fmtDate(t.date)}</td>
-              <td><span class="mf-txn-badge ${t.type.toLowerCase()}">${t.type}</span></td>
-              <td class="symbol">${t.symbol || '—'}</td>
-              <td class="name">${t.description}</td>
+              <td><span class="mf-txn-badge ${(t.type || '').toLowerCase()}">${escHtml(t.type)}</span></td>
+              <td class="symbol">${escHtml(t.symbol) || '—'}</td>
+              <td class="name">${escHtml(t.description)}</td>
               <td class="right">${t.quantity ? fmtNum(t.quantity) : '—'}</td>
               <td class="right">${t.price ? fmt$(t.price) : '—'}</td>
               <td class="right ${t.amount >= 0 ? 'pos' : 'neg'}">${fmt$(Math.abs(t.amount))}</td>
@@ -936,6 +1330,114 @@ function renderTransactions() {
           `).join('')}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+// ── Pagination helpers ──────────────────────────────────────────────────────
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+function totalPages(total, pageSize) {
+  if (pageSize === 'all') return 1;
+  return Math.max(1, Math.ceil(total / pageSize));
+}
+
+function clampPage(page, total, pageSize) {
+  const tp = totalPages(total, pageSize);
+  return Math.max(1, Math.min(page || 1, tp));
+}
+
+function pageSlice(arr, page, pageSize) {
+  if (pageSize === 'all') return arr;
+  const start = (page - 1) * pageSize;
+  return arr.slice(start, start + pageSize);
+}
+
+function handlePagerClick(scope, action) {
+  const cur = scope === 'holdings' ? state.holdingsPage : state.txnPage;
+  const size = scope === 'holdings' ? state.holdingsPageSize : state.txnPageSize;
+  const total = scope === 'holdings' ? filteredPositions().length : filteredTransactions().length;
+  const tp = totalPages(total, size);
+  let next = cur;
+  if (action === 'first') next = 1;
+  else if (action === 'prev') next = Math.max(1, cur - 1);
+  else if (action === 'next') next = Math.min(tp, cur + 1);
+  else if (action === 'last') next = tp;
+  if (next === cur) return;
+  if (scope === 'holdings') state.holdingsPage = next;
+  else state.txnPage = next;
+  renderContent();
+}
+
+// ── Sortable columns ────────────────────────────────────────────────────────
+// Industry-standard: click a header to sort ascending; click the active header
+// again to flip to descending. Indicator: ▲ (asc), ▼ (desc), ⇅ (neutral).
+function renderSortableHeader(scope, col, label, opts = {}) {
+  const sortState = scope === 'holdings' ? state.holdingsSort : state.txnSort;
+  const active = sortState.col === col;
+  const arrow = active ? (sortState.dir === 'asc' ? '▲' : '▼') : '<span class="mf-sort-neutral">⇅</span>';
+  const cls = ['mf-sortable'];
+  if (opts.right) cls.push('right');
+  if (active) cls.push('mf-sort-active');
+  return `<th class="${cls.join(' ')}" data-scope="${scope}" data-col="${col}" role="button" tabindex="0">${escHtml(label)} <span class="mf-sort-arrow">${arrow}</span></th>`;
+}
+
+function applySort(rows, scope, accessors) {
+  const sortState = scope === 'holdings' ? state.holdingsSort : state.txnSort;
+  const accessor = accessors[sortState.col];
+  if (!accessor) return rows;
+  const dir = sortState.dir === 'asc' ? 1 : -1;
+  // Stable sort with mixed-type handling
+  return [...rows].sort((a, b) => {
+    const av = accessor(a);
+    const bv = accessor(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) * dir;
+  });
+}
+
+function handleSortClick(scope, col) {
+  const sortState = scope === 'holdings' ? state.holdingsSort : state.txnSort;
+  if (sortState.col === col) {
+    sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.col = col;
+    // Sensible default direction per column type
+    const numericCols = ['qty', 'price', 'value', 'alloc', 'gl', 'glPct', 'amount', 'quantity'];
+    sortState.dir = numericCols.includes(col) ? 'desc' : 'asc';
+  }
+  renderContent();
+}
+
+function renderPaginationBar(scope, total, page, pageSize) {
+  const tp = totalPages(total, pageSize);
+  const start = pageSize === 'all' ? 1 : (page - 1) * pageSize + 1;
+  const end   = pageSize === 'all' ? total : Math.min(page * pageSize, total);
+  const atFirst = page <= 1;
+  const atLast  = page >= tp;
+  return `
+    <div class="mf-pagination" data-scope="${scope}">
+      <div class="mf-pagination-info">
+        Showing <strong>${start}</strong>–<strong>${end}</strong> of <strong>${total}</strong>
+      </div>
+      <div class="mf-pagination-controls">
+        <label class="mf-pagination-label">Rows
+          <select class="mf-pagesize" data-scope="${scope}">
+            ${PAGE_SIZE_OPTIONS.map(n => `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n}</option>`).join('')}
+            <option value="all" ${pageSize === 'all' ? 'selected' : ''}>All</option>
+          </select>
+        </label>
+        <div class="mf-pagination-buttons">
+          <button class="mf-pager" data-scope="${scope}" data-page="first" ${atFirst ? 'disabled' : ''} title="First page">⏮</button>
+          <button class="mf-pager" data-scope="${scope}" data-page="prev"  ${atFirst ? 'disabled' : ''} title="Previous page">◀</button>
+          <span class="mf-pagination-pos">Page <strong>${page}</strong> of <strong>${tp}</strong></span>
+          <button class="mf-pager" data-scope="${scope}" data-page="next"  ${atLast ? 'disabled' : ''} title="Next page">▶</button>
+          <button class="mf-pager" data-scope="${scope}" data-page="last"  ${atLast ? 'disabled' : ''} title="Last page">⏭</button>
+        </div>
+      </div>
     </div>
   `;
 }
