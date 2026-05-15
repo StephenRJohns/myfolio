@@ -11,7 +11,7 @@
 // silently when the service worker is suspended mid-fetch — ports explicitly
 // keep the worker alive while the port is open.
 
-console.log('[MyFolio SW] service worker started, build 1.4.9');
+console.log('[MyFolio SW] service worker started, build 1.4.14');
 
 const ALLOWED_HOSTS = [
   /^https:\/\/(?:www\.)?stooq\.com\//i,
@@ -23,17 +23,31 @@ function isAllowed(url) {
   return ALLOWED_HOSTS.some(re => re.test(url));
 }
 
+// Defensive port.postMessage — the content script may have disconnected the
+// port (timeout, success, navigation) before our fetch resolves. Without
+// this, the SW raises "Attempting to use a disconnected port object" which
+// surfaces in the chrome://extensions errors page.
+function safePost(port, msg) {
+  try { port.postMessage(msg); }
+  catch (e) { console.log('[MyFolio SW] (port already closed, dropping response)'); }
+}
+
 // Port-based fetch proxy. While a port is connected, Chrome keeps the SW
 // alive — fetches can take seconds without risk of premature termination.
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'mf-fetch') return;
+  let disconnected = false;
+  port.onDisconnect.addListener(() => {
+    disconnected = true;
+    console.log('[MyFolio SW] port closed');
+  });
   console.log('[MyFolio SW] port opened');
   port.onMessage.addListener(async (msg) => {
     const { id, type, url } = msg || {};
     if (type !== 'fetch') return;
     console.log('[MyFolio SW] fetch request:', id, url);
     if (!isAllowed(url)) {
-      port.postMessage({ id, ok: false, error: 'URL not allowed' });
+      safePost(port, { id, ok: false, error: 'URL not allowed' });
       return;
     }
     try {
@@ -43,21 +57,24 @@ chrome.runtime.onConnect.addListener((port) => {
         referrerPolicy: 'no-referrer',
         cache: 'no-cache',
       });
+      if (disconnected) return;
       console.log('[MyFolio SW] response:', resp.status, resp.url, 'ok=', resp.ok);
       if (!resp.ok) {
-        port.postMessage({ id, ok: false, error: `HTTP ${resp.status}`, status: resp.status });
+        safePost(port, { id, ok: false, error: `HTTP ${resp.status}`, status: resp.status });
         return;
       }
       const text = await resp.text();
+      if (disconnected) return;
       console.log('[MyFolio SW] body length:', text.length);
-      port.postMessage({ id, ok: true, text, finalUrl: resp.url });
+      safePost(port, { id, ok: true, text, finalUrl: resp.url });
     } catch (err) {
-      console.error('[MyFolio SW] fetch error:', err && err.name, err && err.message);
-      port.postMessage({ id, ok: false, error: String((err && err.message) || err || 'unknown'), name: err && err.name });
+      // Use console.warn rather than console.error — many of these are
+      // expected (e.g. Stooq blocked on this network, with Yahoo fallback
+      // handling the actual result) and console.error surfaces a red
+      // banner on the chrome://extensions errors page.
+      console.warn('[MyFolio SW] fetch failed:', err && err.name, err && err.message);
+      safePost(port, { id, ok: false, error: String((err && err.message) || err || 'unknown'), name: err && err.name });
     }
-  });
-  port.onDisconnect.addListener(() => {
-    console.log('[MyFolio SW] port closed');
   });
 });
 
