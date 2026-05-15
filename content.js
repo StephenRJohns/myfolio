@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.3';
+const MF_VERSION = 'v1.4.4';
 
 const state = {
   accounts: [],
@@ -260,6 +260,53 @@ function parseApiResponse(url, data) {
       }
     } else {
       dbg('warn', 'Position: no clientData.account array', { keys: Object.keys(data?.clientData || {}), sample: JSON.stringify(data).slice(0, 400) });
+    }
+  }
+
+  // ── Activity history (loaded when user navigates to Activity page) ───────
+  // The intraday endpoint only delivers TODAY's transactions; historical
+  // deposits/withdrawals/transfers (e.g. a $46k contribution made last week)
+  // live in a separate endpoint that fires when the brokerage's Activity tab
+  // is opened. We accept any URL containing "activity" but not "intraday",
+  // and try several common data shapes.
+  if (u.includes('activity') && !u.includes('activityintraday') && !u.includes('intraday')) {
+    const harvested = [];
+    const tryShape = (acctList) => {
+      if (!Array.isArray(acctList)) return;
+      for (const acct of acctList) {
+        const acts = acct.activities || acct.activity || acct.transactions || acct.txns || [];
+        if (Array.isArray(acts)) {
+          for (const t of acts) harvested.push(normalizeBrokerageTxn(t, acct));
+        }
+      }
+    };
+    // Common LPL response shapes
+    tryShape(data?.clientData?.account);
+    tryShape(data?.clientData?.accounts);
+    tryShape(data?.data?.accounts);
+    tryShape(data?.accounts);
+    // Flat list shapes
+    const flat = data?.clientData?.activities || data?.activities || data?.data?.activities;
+    if (Array.isArray(flat)) {
+      for (const t of flat) harvested.push(normalizeBrokerageTxn(t, { accountId: t.accountId || t.accountNumber || '' }));
+    }
+
+    if (harvested.length) {
+      // Merge with existing — dedup by accountId + date + amount + symbol
+      const key = (t) => `${t.accountId}|${t.date}|${t.amount}|${t.symbol}`;
+      const existing = new Map(state.transactions.map(t => [key(t), t]));
+      let added = 0;
+      for (const t of harvested) {
+        if (!existing.has(key(t))) { existing.set(key(t), t); added++; }
+      }
+      state.transactions = Array.from(existing.values());
+      dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, harvested[0]);
+      // Re-synthesize accounts now that we may have the missing cash flows
+      if (state.dailyValues.length) synthesizeMissingAccountDailies();
+      refreshOverlay();
+    } else {
+      const sample = Object.keys(data || {}).slice(0, 10);
+      dbg('info', `Activity-looking URL didn't match known shapes — keys: [${sample.join(', ')}]`, { url, sample: JSON.stringify(data).slice(0, 400) });
     }
   }
 
@@ -1872,15 +1919,28 @@ async function loadBenchmarkSeries(ticker) {
     // Proxy through the service worker — MV3 content scripts use the host
     // page's origin and Stooq doesn't allow CORS for accountview.lpl.com.
     if (!extensionContextValid()) throw new Error('Extension not loaded');
+    dbg('info', `Stooq: requesting ${ticker} via service worker`, { url });
     const resp = await new Promise((resolve) => {
+      let settled = false;
+      const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+      // Watchdog — if the service worker never responds (it died, isn't
+      // registered, etc.) at least fail visibly instead of hanging forever.
+      const watchdog = setTimeout(() => done({ ok: false, error: 'No response from service worker within 15s (worker may be sleeping or not registered)' }), 15000);
       try {
         chrome.runtime.sendMessage({ type: 'MF_FETCH_TEXT', url }, (r) => {
-          try { void chrome.runtime?.lastError; } catch (e) {}
-          resolve(r || { ok: false, error: 'No response from background worker' });
+          clearTimeout(watchdog);
+          const lastErr = (() => { try { return chrome.runtime?.lastError; } catch (e) { return null; } })();
+          if (lastErr) { done({ ok: false, error: `sendMessage: ${lastErr.message || String(lastErr)}` }); return; }
+          if (!r) { done({ ok: false, error: 'Service worker returned undefined response' }); return; }
+          done(r);
         });
-      } catch (e) { resolve({ ok: false, error: String(e.message || e) }); }
+      } catch (e) {
+        clearTimeout(watchdog);
+        done({ ok: false, error: String(e.message || e) });
+      }
     });
     if (!resp.ok) throw new Error(resp.error || 'fetch failed');
+    dbg('ok', `Stooq: service worker responded${resp.finalUrl && resp.finalUrl !== url ? ` (redirected to ${resp.finalUrl})` : ''}`);
     const text = resp.text;
     const data = parseStooqCsv(text);
     if (!data.length) throw new Error('Empty or unparseable CSV');
