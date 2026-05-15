@@ -636,6 +636,13 @@
   margin-top: 16px;
   line-height: 1.7;
 }
+.mf-note-warn {
+  color: #fcd34d;
+  background: rgba(252,211,77,0.06);
+  border-left: 3px solid #f59e0b;
+  padding: 8px 10px;
+  border-radius: 0 4px 4px 0;
+}
 
 @keyframes mf-pulse {
   0%, 100% { opacity: 0.4; }

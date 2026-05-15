@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.2';
+const MF_VERSION = 'v1.4.3';
 
 const state = {
   accounts: [],
@@ -1487,6 +1487,24 @@ function renderOverview() {
     ? `${fmtDateShort(dv[0].date)} – ${fmtDateShort(dv[dv.length - 1].date)}`
     : '';
 
+  // If the chart's ending value differs materially from the portfolio's
+  // current value, some accounts aren't represented in the chart (the
+  // brokerage didn't supply daily values and we lacked transactions to
+  // reconstruct them). Show a banner so the user knows.
+  let chartGapMsg = '';
+  if (hasDailyData && !selectedAcct) {
+    const chartEnd = dv[dv.length - 1].value;
+    const accountTotal = state.accounts
+      .filter(a => a.id !== 'portfolio' && a.value != null)
+      .reduce((s, a) => s + a.value, 0);
+    const portfolioCard = state.accounts.find(a => a.id === 'portfolio');
+    const trueTotal = portfolioCard && portfolioCard.value != null ? portfolioCard.value : accountTotal;
+    if (trueTotal > 0 && Math.abs(trueTotal - chartEnd) / trueTotal > 0.02) {
+      const missing = trueTotal - chartEnd;
+      chartGapMsg = `Chart shows ${fmt$(chartEnd)} of your ${fmt$(trueTotal)} total — ${fmt$(missing)} is in accounts your brokerage did not deliver daily history for. Open the brokerage's Activity page to capture deposit history so the gap can be reconstructed.`;
+    }
+  }
+
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
@@ -1534,6 +1552,7 @@ function renderOverview() {
           ` : ''}
           <canvas id="mf-overview-chart" style="width:100%;display:block;height:220px"></canvas>
           ${!hasDailyData ? `<p class="mf-note" style="margin-top:8px">Waiting for daily value history — it loads automatically once your brokerage's Overview page has been open. If this persists after 10 seconds, try scrolling down to trigger the brokerage's chart section.</p>` : ''}
+          ${chartGapMsg ? `<p class="mf-note mf-note-warn" style="margin-top:8px">${escHtml(chartGapMsg)}</p>` : ''}
         </div>
       </div>
 
