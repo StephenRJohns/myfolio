@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.6';
+const MF_VERSION = 'v1.4.7';
 
 const state = {
   accounts: [],
@@ -166,6 +166,40 @@ async function proactiveFetchVot() {
   }
 }
 
+// Same idea, for the historical activity endpoint. After the user visits
+// LPL's Activity page once, the URL is saved; from then on we replay it on
+// every load so the deposit transactions are always available for synthesis.
+async function proactiveFetchActivity() {
+  if (!extensionContextValid()) return;
+  const result = await new Promise((resolve) => safeStorageGet(['activityHistoryRequest'], resolve));
+  const req = result.activityHistoryRequest;
+  if (!req?.url) {
+    dbg('info', 'Proactive activity fetch: no saved URL — user has not visited /web/activity yet');
+    return;
+  }
+  if (Date.now() - req.savedAt > 7 * 24 * 60 * 60 * 1000) {
+    dbg('info', 'Proactive activity fetch: saved request too old, skipping');
+    return;
+  }
+  dbg('info', `Proactive activity fetch (${req.method})`, { url: req.url });
+  try {
+    const init = { credentials: 'include' };
+    if (req.method === 'POST' && req.reqBody) {
+      init.method = 'POST';
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = typeof req.reqBody === 'string' ? req.reqBody : JSON.stringify(req.reqBody);
+    }
+    const resp = await fetch(req.url, init);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    dbg('ok', 'Proactive activity fetch succeeded — parsing transactions');
+    parseApiResponse(req.url, data);
+    refreshOverlay();
+  } catch (err) {
+    dbg('warn', 'Proactive activity fetch failed', { err: String(err) });
+  }
+}
+
 function recordLoadTime(ms) {
   if (state.sessionRecorded) return;
   state.sessionRecorded = true;
@@ -234,6 +268,10 @@ function parseApiResponse(url, data) {
       // If account-vot hasn't delivered daily values yet, proactively fetch it
       // (5s delay lets LPL's own call arrive naturally first)
       setTimeout(() => { if (!state.dailyValues.length) proactiveFetchVot(); }, 5000);
+      // Activity history rarely arrives unless the user navigates to /web/activity;
+      // replay the saved URL (if we have one) so deposit transactions are picked up
+      // on every page load. 6s delay so the natural call (if any) lands first.
+      setTimeout(() => { proactiveFetchActivity(); }, 6000);
     } else {
       dbg('warn', 'AccountInfo: missing portfolioBalance', { keys: Object.keys(cd || {}), sample: JSON.stringify(data).slice(0, 400) });
     }
@@ -301,6 +339,10 @@ function parseApiResponse(url, data) {
       }
       state.transactions = Array.from(existing.values());
       dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, harvested[0]);
+      // Save the URL so we can replay it on future page loads, just like
+      // we do for account-vot — this is how the chart becomes "self-healing"
+      // after a single visit to the Activity page.
+      safeStorageSet({ activityHistoryRequest: { url, method: method || 'GET', reqBody: reqBody || null, savedAt: Date.now() } });
       // Re-synthesize accounts now that we may have the missing cash flows
       if (state.dailyValues.length) synthesizeMissingAccountDailies();
       refreshOverlay();
@@ -557,12 +599,15 @@ function synthesizeMissingAccountDailies() {
     const existing = state.accountDailyValues[acct.id];
     if (existing && existing.length >= 2) continue;
 
-    // Gather this account's cash flows from the transactions list
+    // Gather this account's cash flows from the transactions list. Use
+    // cashFlowImpact so security transfers (amount=0 but quantity>0) get
+    // counted at their estimated dollar value.
     const acctTxns = state.transactions.filter(t => t.accountId === acct.id && isCashFlow(t));
     const cfList = [];
     for (const t of acctTxns) {
       const td = parseDateLoose(t.date);
-      if (td) cfList.push({ date: td, amount: t.amount || 0 });
+      const impact = cashFlowImpact(t);
+      if (td && Math.abs(impact) >= 0.01) cfList.push({ date: td, amount: impact });
     }
 
     const synth = [];
@@ -1157,9 +1202,10 @@ function periodFramesFromSeries(dv) {
 // We treat anything that looks like an external deposit/withdrawal/transfer/
 // rollover/distribution as a cash flow. Internal market activity (buys/sells/
 // dividends/interest reinvested in the account) is NOT a cash flow.
-const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN)$/;
-const CASH_FLOW_DESC_RE = /\bDEPOSIT\b|\bWITHDRAW|\bTRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL|\bJNL\b|\bACH\b|\bWIRE\b|FUNDING|REDEMPTION/i;
+const CASH_FLOW_TYPE_RE = /^(DEP|DEPO|CT|CTBN|WD|WDR|DIST|DSTR|RMD|TF|TFI|TFO|XFR|XFRI|XFRO|ROL|ROLI|ROLO|CONTR|WTHDRW|JRNL|JOURN|JNL|JI|JO|JOI|ACH|WIRE|RMTC|FUND|RVST|REIN|ACH FUNDS|BENEFICIARY|JOURNAL)$/;
+const CASH_FLOW_DESC_RE = /\bDEPOSIT\b|\bWITHDRAW|\bTRANSFER\b|ROLLOVER|CONTRIBUT|DISTRIBUT|JOURNAL|\bJNL\b|\bACH\b|\bWIRE\b|FUNDING|REDEMPTION|BENEFICIARY|DEATH DISTRIBUTION|FR A\/C|TO A\/C/i;
 const SECURITIES_TRADE_TYPE_RE = /^(BUY|BOT|BUYTOOPEN|BUYTOCLOSE|SELL|SLD|SELLTOOPEN|SELLTOCLOSE|DIV|DIVIDEND|INT|INTEREST|FEE|COMM|EXCH|TAX|SPLIT|MERG)$/;
+const TRANSFER_TYPE_RE = /^(BENEFICIARY|JOURNAL|JNL|JI|JO|JOI|XFR|XFRI|XFRO|TF|TFI|TFO|ROL|ROLI|ROLO|ACH|ACH FUNDS|WIRE)$/;
 
 function isCashFlow(txn) {
   if (!txn) return false;
@@ -1171,6 +1217,29 @@ function isCashFlow(txn) {
   // isn't a known securities-trade type is likely an external cash flow.
   if (!txn.symbol && txn.amount != null && txn.amount !== 0 && !SECURITIES_TRADE_TYPE_RE.test(t)) return true;
   return false;
+}
+
+// Estimated dollar impact of a cash-flow transaction. For ordinary cash
+// movements (deposits, withdrawals, ACH, journals), use the amount field.
+// For security TRANSFERS (e.g. beneficiary inheritance — quantity>0,
+// amount=0), estimate value using the position's current price (the only
+// price we have). Sign is + for inflows, − for outflows; we infer direction
+// from the description if amount is 0.
+function cashFlowImpact(txn) {
+  if (!txn) return 0;
+  // Plain cash transactions: use amount directly
+  if (txn.amount && Math.abs(txn.amount) >= 0.01) return txn.amount;
+  // Security transfer: amount=0 but quantity != 0 — estimate value from
+  // the position's current price.
+  if (txn.symbol && txn.quantity && Math.abs(txn.quantity) >= 0.001) {
+    const pos = state.positions.find(p => p.symbol === txn.symbol && p.accountId === txn.accountId);
+    const price = (pos && pos.price) || txn.price || 0;
+    if (price > 0) {
+      // Direction: positive quantity = inflow, negative = outflow
+      return txn.quantity * price;
+    }
+  }
+  return 0;
 }
 
 function modifiedDietzReturn(series, transactions, periodStart) {
