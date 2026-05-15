@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.10';
+const MF_VERSION = 'v1.4.11';
 
 const state = {
   accounts: [],
@@ -277,13 +277,19 @@ function parseApiResponse(url, data) {
       backfillAccountValues();
       dbg('ok', `AccountInfo: portfolio $${cd.portfolioBalance}, ${accts.length} accounts`, { dayChange: cd.dayChange, dayChangePct: cd.dayChangePercentage });
       refreshOverlay();
-      // If account-vot hasn't delivered daily values yet, proactively fetch it
-      // (5s delay lets LPL's own call arrive naturally first)
-      setTimeout(() => { if (!state.dailyValues.length) proactiveFetchVot(); }, 5000);
-      // Activity history rarely arrives unless the user navigates to /web/activity;
-      // replay the saved URL (if we have one) so deposit transactions are picked up
-      // on every page load. 6s delay so the natural call (if any) lands first.
-      setTimeout(() => { proactiveFetchActivity(); }, 6000);
+      // If account-vot hasn't delivered daily values yet, proactively fetch
+      // it. On /web/overview the brokerage fires it naturally — wait 5s so
+      // we don't double-fetch. On every other page (activity, holdings,
+      // transactions, etc.) it never fires, so go after it almost
+      // immediately.
+      const isOverviewPage = /\/web\/overview/i.test(window.location.pathname);
+      const votDelay = isOverviewPage ? 5000 : 1500;
+      const actDelay = isOverviewPage ? 6000 : 2000;
+      setTimeout(() => { if (!state.dailyValues.length) proactiveFetchVot(); }, votDelay);
+      setTimeout(() => { proactiveFetchActivity(); }, actDelay);
+      // Retry once more if the first attempt didn't deliver — e.g. brief
+      // network hiccup, slow LPL server, etc.
+      setTimeout(() => { if (!state.dailyValues.length) proactiveFetchVot(); }, votDelay + 8000);
     } else {
       dbg('warn', 'AccountInfo: missing portfolioBalance', { keys: Object.keys(cd || {}), sample: JSON.stringify(data).slice(0, 400) });
     }
