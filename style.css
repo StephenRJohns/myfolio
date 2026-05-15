@@ -237,29 +237,62 @@
 .mf-account-type { font-size: 12px; color: #f1f5f9; margin-bottom: 10px; }
 .mf-account-value { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
 .mf-account-change { font-size: 12px; margin-top: 4px; }
+.mf-account-extra { font-size: 12px; margin-top: 2px; }
 .mf-account-gl { font-size: 12px; color: #f1f5f9; margin-top: 4px; }
 .mf-hint { font-size: 11px; font-weight: 400; color: #94a3b8; text-transform: none; letter-spacing: 0; margin-left: 8px; }
 
-/* ── Breadcrumb (when filtered to a specific account) ────────────────────── */
+/* ── Breadcrumb / active-filter chips ──────────────────────────────────── */
 .mf-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
   color: #94a3b8;
   font-size: 13px;
 }
-.mf-breadcrumb-back {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #cbd5e1;
-  padding: 5px 12px;
-  border-radius: 6px;
-  cursor: pointer;
+.mf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #1e1b4b;
+  border: 1px solid #4338ca;
+  color: #c7d2fe;
+  padding: 4px 6px 4px 12px;
+  border-radius: 16px;
   font-size: 12px;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.mf-breadcrumb-back:hover { background: #1e293b; color: #f1f5f9; border-color: #475569; }
+.mf-chip strong { color: #f1f5f9; font-weight: 600; }
+.mf-chip-x {
+  background: transparent;
+  border: none;
+  color: #c7d2fe;
+  cursor: pointer;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.mf-chip-x:hover { background: #312e81; color: #fff; }
+
+/* Status-bar footnote asterisk + inline note */
+.mf-footnote-mark {
+  color: #fbbf24;
+  font-weight: 700;
+  margin-left: 1px;
+}
+.mf-footnote-note {
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: italic;
+  margin-left: 8px;
+  opacity: 0.9;
+}
 
 /* ── Table ───────────────────────────────────────────────────────────────── */
 .mf-table {

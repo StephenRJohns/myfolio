@@ -14,6 +14,7 @@ const state = {
   dailyValues: [],         // [{date, value}] aggregated across accounts
   accountDailyValues: {},  // accountId -> [{date, value}]
   selectedAccountId: null, // null = view all; 'portfolio' acts the same as null
+  selectedAssetClass: null, // asset-class label set by clicking an allocation slice
   overlayOpen: false,
   apiCallCount: 0,
   lastApiTime: null,
@@ -102,6 +103,7 @@ function parseApiResponse(url, data) {
       // Per-account entries
       const accts = Array.isArray(cd.accounts) ? cd.accounts.map(normalizeBrokerageAccount) : [];
       state.accounts = accts.length ? [portfolio, ...accts] : [portfolio];
+      backfillAccountValues();
       dbg('ok', `AccountInfo: portfolio $${cd.portfolioBalance}, ${accts.length} accounts`, { dayChange: cd.dayChange, dayChangePct: cd.dayChangePercentage });
       refreshOverlay();
     } else {
@@ -198,12 +200,15 @@ function parseApiResponse(url, data) {
       }
 
       // Aggregate dailyValues across all accounts by date + capture per-account
+      // series, per-account YTD/ITD returns, and (when available) longer-frame returns.
       const byDate = {};
       const perAcct = {};
+      const acctDiag = [];
       for (const acct of accts) {
         const acctId = String(acct.accountId || acct.accountNumber || '');
+        const cd = acct.chartData || {};
         const acctSeries = [];
-        for (const dv of (acct.chartData?.dailyValues || [])) {
+        for (const dv of (cd.dailyValues || [])) {
           const d = dv.date || dv.asOfDate || dv.Date;
           const v = toNum(dv.endValue ?? dv.value ?? dv.portfolioValue ?? dv.Value ?? dv.EndValue);
           if (d && v != null) {
@@ -211,24 +216,32 @@ function parseApiResponse(url, data) {
             acctSeries.push({ date: d, value: v });
           }
         }
+        acctDiag.push({ id: acctId, name: acct.accountName || acct.nickName || '', days: acctSeries.length, ytd: cd.PeriodTotalReturn });
         if (acctId && acctSeries.length) {
           acctSeries.sort((a, b) => a.date.localeCompare(b.date));
           perAcct[acctId] = acctSeries;
-          // Backfill missing account value with the latest daily endValue
+        }
+        // Patch returns onto the matching state.accounts entry (account-vot's
+        // PeriodTotalReturn = YTD per LPL's chart query default)
+        if (acctId) {
           const accIdx = state.accounts.findIndex(x => x.id === acctId);
-          if (accIdx >= 0 && (state.accounts[accIdx].value == null || state.accounts[accIdx].value === 0)) {
-            state.accounts[accIdx].value = acctSeries[acctSeries.length - 1].value;
+          if (accIdx >= 0) {
+            const a = state.accounts[accIdx];
+            if (a.ytdReturn == null) a.ytdReturn = toNum(cd.PeriodTotalReturn);
+            a.itdReturn = toNum(cd.ITDTotalReturn);
+            a.itdReturnAnnualized = toNum(cd.ITDReturnAnnualized);
           }
         }
       }
       state.accountDailyValues = perAcct;
+      backfillAccountValues();
 
       const sorted = Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
       if (sorted.length) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
-        dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, sorted[sorted.length - 1]);
+        dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
       } else {
-        dbg('info', 'account-vot: no dailyValues (may need a longer date range)');
+        dbg('info', 'account-vot: no dailyValues (may need a longer date range)', { perAccount: acctDiag });
       }
 
       refreshOverlay();
@@ -294,28 +307,97 @@ function flattenPerf(data) {
   return out;
 }
 
+// Backfill missing per-account values from the daily-value series captured
+// by account-vot. Runs from both endpoints so it works regardless of arrival
+// order (accountinfo before account-vot, or the reverse).
+function backfillAccountValues() {
+  if (!state.accounts.length || !state.accountDailyValues) return;
+  let patched = 0;
+  for (const acct of state.accounts) {
+    if (acct.id === 'portfolio') continue;
+    if (acct.value != null && acct.value !== 0) continue;
+    const series = state.accountDailyValues[acct.id];
+    if (!series || !series.length) continue;
+    acct.value = series[series.length - 1].value;
+    patched++;
+  }
+  if (patched) dbg('ok', `Backfilled value for ${patched} account${patched > 1 ? 's' : ''} from account-vot daily values`);
+}
+
 // ── Brokerage-specific normalizers (field names from awsp.myaccountviewonline.com) ─
+const ACCOUNT_VALUE_FIELDS = [
+  'marketValue', 'totalValue', 'accountValue', 'balance',
+  'endingMarketValue', 'currentMarketValue', 'endBalance',
+  'currentBalance', 'accountBalance', 'endingBalance',
+  'assetMarketValue', 'marketVal', 'mktVal', 'mktValue',
+  'acctValue', 'portfolioValue', 'endValue', 'endingValue',
+  'totalMarketValue', 'value', 'acctMktVal', 'assetValue',
+  'currentValue', 'totalAssets', 'currentAssetValue',
+  'acctBalance', 'totalBalance', 'marketBalance',
+];
+
+function detectAccountValue(a) {
+  // 1) Try known explicit field names
+  for (const f of ACCOUNT_VALUE_FIELDS) {
+    if (a[f] != null) {
+      const v = toNum(a[f]);
+      if (v != null) return { value: v, source: f };
+    }
+  }
+  // 2) Try a few common nested containers
+  for (const sub of ['balance', 'summary', 'assets', 'totals', 'balances']) {
+    const obj = a[sub];
+    if (obj && typeof obj === 'object') {
+      for (const f of ACCOUNT_VALUE_FIELDS) {
+        const v = toNum(obj[f]);
+        if (v != null) return { value: v, source: `${sub}.${f}` };
+      }
+    }
+  }
+  // 3) Heuristic: scan numeric fields, exclude change/percent fields,
+  //    pick the largest value-looking number (matches keywords value/balance/market/total/asset).
+  const candidates = [];
+  for (const [k, v] of Object.entries(a)) {
+    const n = toNum(v);
+    if (n == null) continue;
+    if (n < 1 || n > 1e10) continue;
+    if (/change|pct|percent|return|gain|loss/i.test(k)) continue;
+    if (/value|balance|market|total|asset|portfolio|amount|principal/i.test(k)) {
+      candidates.push({ k, v: n });
+    }
+  }
+  if (candidates.length) {
+    candidates.sort((a, b) => b.v - a.v);
+    return { value: candidates[0].v, source: `inferred:${candidates[0].k}`, candidates };
+  }
+  return { value: null };
+}
+
 function normalizeBrokerageAccount(a) {
   const id = String(a.accountId || a.accountNumber || '');
-  const value = toNum(
-    a.marketValue ?? a.totalValue ?? a.accountValue ?? a.balance ??
-    a.endingMarketValue ?? a.currentMarketValue ?? a.endBalance ??
-    a.currentBalance ?? a.accountBalance ?? a.endingBalance ??
-    a.assetMarketValue ?? a.marketVal ?? a.mktVal ?? a.mktValue ??
-    a.acctValue ?? a.portfolioValue ?? a.endValue ?? a.endingValue ??
-    a.totalMarketValue ?? a.value ??
-    a.balance?.marketValue ?? a.summary?.marketValue ??
-    a.summary?.totalValue ?? a.summary?.endingValue ?? null
-  );
-  if (value == null) {
-    dbg('warn', `Account value unrecognized for "${a.accountName || a.nickName || id}"`, { keys: Object.keys(a) });
+  const det = detectAccountValue(a);
+  if (det.source && det.source.startsWith('inferred:')) {
+    dbg('warn', `Account value inferred (no known field) for "${a.accountName || a.nickName || id}": ${det.source}=${det.value}`, det.candidates || {});
+  } else if (det.value == null) {
+    // Dump everything primitive so the right field can be spotted in the Debug tab
+    const dump = {};
+    for (const [k, v] of Object.entries(a)) {
+      if (v == null) continue;
+      if (typeof v === 'object') {
+        if (Array.isArray(v)) dump[k] = `[Array length=${v.length}]`;
+        else dump[k] = `{keys: ${Object.keys(v).slice(0, 12).join(', ')}}`;
+      } else {
+        dump[k] = v;
+      }
+    }
+    dbg('warn', `Account value NOT detected for "${a.accountName || a.nickName || id}" — paste this in your bug report`, dump);
   }
   return {
     id,
     accountNumber: String(a.accountNumber || ''),
     name: a.accountName || a.nickName || a.accountNumber || '',
     type: a.accountClassName || a.accountClassCode || '',
-    value,
+    value: det.value,
     change: toNum(a.dayChange ?? a.mktValChange ?? null),
     changePct: toNum(a.dayChangePercentage ?? a.dayChangePct ?? null),
     ytdReturn: toNum(a.ytdReturn ?? null),
@@ -448,9 +530,21 @@ function buildOverlay() {
         renderContent();
         return;
       }
+      if (e.target.closest('#mf-clear-class')) {
+        state.selectedAssetClass = null;
+        renderContent();
+        return;
+      }
       const card = e.target.closest('.mf-account-card[data-acct-id]');
       if (card) {
-        state.selectedAccountId = card.dataset.acctId;
+        const id = card.dataset.acctId;
+        if (id === 'portfolio') {
+          // Clicking the Total Portfolio card clears any active filter
+          state.selectedAccountId = null;
+          state.selectedAssetClass = null;
+        } else {
+          state.selectedAccountId = id;
+        }
         renderContent();
       }
     });
@@ -459,7 +553,13 @@ function buildOverlay() {
       const card = e.target.closest('.mf-account-card[data-acct-id]');
       if (card) {
         e.preventDefault();
-        state.selectedAccountId = card.dataset.acctId;
+        const id = card.dataset.acctId;
+        if (id === 'portfolio') {
+          state.selectedAccountId = null;
+          state.selectedAssetClass = null;
+        } else {
+          state.selectedAccountId = id;
+        }
         renderContent();
       }
     });
@@ -480,12 +580,21 @@ function updateStatusBar() {
   const hasData = state.accounts.length || state.positions.length || state.transactions.length;
 
   if (hasData) {
+    // Count the real (non-portfolio) accounts, and note how many are hidden
+    const realAccounts = state.accounts.filter(a => a.id !== 'portfolio');
+    const hiddenCount = realAccounts.filter(isHiddenZeroAccount).length;
     const parts = [];
-    if (state.accounts.length) parts.push(`${state.accounts.length} account${state.accounts.length > 1 ? 's' : ''}`);
+    if (realAccounts.length) {
+      const star = hiddenCount > 0 ? `<span class="mf-footnote-mark">*</span>` : '';
+      parts.push(`${realAccounts.length} account${realAccounts.length === 1 ? '' : 's'}${star}`);
+    }
     if (state.positions.length) parts.push(`${state.positions.length} positions`);
     if (state.transactions.length) parts.push(`${state.transactions.length} transactions`);
     const elapsed = state.loadStart ? ((Date.now() - state.loadStart) / 1000).toFixed(1) : '?';
-    el.textContent = `Loaded in ${elapsed}s — ${parts.join(' · ')}`;
+    const footnote = hiddenCount > 0
+      ? ` <span class="mf-footnote-note">*${hiddenCount} $0/closed account${hiddenCount > 1 ? 's' : ''} hidden</span>`
+      : '';
+    el.innerHTML = `Loaded in ${elapsed}s — ${parts.join(' · ')}${footnote}`;
     bar.classList.remove('mf-status-warn');
     bar.classList.add('mf-status-ok');
     if (spinner) spinner.classList.add('mf-spinner-done');
@@ -566,9 +675,19 @@ function getSelectedAccount() {
   return state.accounts.find(a => a.id === id) || null;
 }
 
-function filteredPositions() {
+// Positions filtered by account only — used by the allocation chart so the
+// user keeps category context after clicking a slice.
+function accountFilteredPositions() {
   const acct = getSelectedAccount();
   return acct ? state.positions.filter(p => p.accountId === acct.id) : state.positions;
+}
+
+function filteredPositions() {
+  let positions = accountFilteredPositions();
+  if (state.selectedAssetClass) {
+    positions = positions.filter(p => classifyPosition(p) === state.selectedAssetClass);
+  }
+  return positions;
 }
 
 function filteredTransactions() {
@@ -582,15 +701,50 @@ function filteredDailyValues() {
   return state.dailyValues;
 }
 
+// Compute MTD / YTD / 1-Year returns from a [{date, value}] series.
+// Returns null for any frame where there isn't enough history.
+function periodFramesFromSeries(dv) {
+  if (!dv || dv.length < 2) return { mtd: null, ytd: null, oneY: null };
+  const latest = dv[dv.length - 1];
+  const latestDate = new Date(latest.date);
+  if (isNaN(latestDate)) return { mtd: null, ytd: null, oneY: null };
+
+  const findStart = (predicate) => {
+    // Walk backwards to find the most recent point that satisfies `predicate`
+    // (i.e. the last bar from before the period boundary). Falls back to the
+    // first bar in the series if no prior bar exists.
+    for (let i = dv.length - 1; i >= 0; i--) {
+      if (predicate(new Date(dv[i].date))) return dv[i];
+    }
+    return dv[0];
+  };
+  const pct = s => (s && s.value > 0) ? ((latest.value - s.value) / s.value) * 100 : null;
+
+  const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
+  const yearStart  = new Date(latestDate.getFullYear(), 0, 1);
+  const oneYearAgo = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+
+  // Only emit MTD when we have a point from before the current month boundary;
+  // otherwise it's the same as ITD for that account and is misleading.
+  const firstDate = new Date(dv[0].date);
+  const mtd  = firstDate < monthStart ? pct(findStart(d => d < monthStart)) : null;
+  const ytd  = firstDate < yearStart  ? pct(findStart(d => d < yearStart))  : null;
+  const oneY = firstDate <= oneYearAgo ? pct(findStart(d => d <= oneYearAgo)) : null;
+  return { mtd, ytd, oneY };
+}
+
 function renderBreadcrumb() {
   const acct = getSelectedAccount();
-  if (!acct) return '';
-  return `
-    <div class="mf-breadcrumb">
-      <button class="mf-breadcrumb-back" id="mf-back-all">← All Accounts</button>
-      <span>Viewing: <strong>${escHtml(acct.name)}</strong>${acct.type ? ` · ${escHtml(acct.type)}` : ''}</span>
-    </div>
-  `;
+  const cls = state.selectedAssetClass;
+  if (!acct && !cls) return '';
+  const chips = [];
+  if (acct) {
+    chips.push(`<span class="mf-chip">Account: <strong>${escHtml(acct.name)}</strong>${acct.type ? ` · ${escHtml(acct.type)}` : ''} <button class="mf-chip-x" id="mf-back-all" title="Clear account filter">×</button></span>`);
+  }
+  if (cls) {
+    chips.push(`<span class="mf-chip">Asset class: <strong>${escHtml(cls)}</strong> <button class="mf-chip-x" id="mf-clear-class" title="Clear asset-class filter">×</button></span>`);
+  }
+  return `<div class="mf-breadcrumb">${chips.join('')}</div>`;
 }
 
 // ── Tab renderers ────────────────────────────────────────────────────────────
@@ -633,6 +787,14 @@ function renderOverview() {
     ytd = state.performance.ytdReturn;
   }
 
+  // MTD / YTD / 1Y computed from the (filtered) daily-value series. If LPL
+  // already gave us a YTD figure on the account we trust that one.
+  const dv = filteredDailyValues();
+  const framed = periodFramesFromSeries(dv);
+  if (ytd == null) ytd = framed.ytd;
+  const mtd = framed.mtd;
+  const oneY = framed.oneY;
+
   const positionsCount = filteredPositions().length;
 
   return `
@@ -646,10 +808,20 @@ function renderOverview() {
             ? `<div class="mf-kpi-sub ${kpiChange >= 0 ? 'pos' : 'neg'}">${kpiChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(kpiChange))}${kpiChangePct != null ? ` (${fmtPct(kpiChangePct)})` : ''} today</div>`
             : `<div class="mf-kpi-waiting"><span class="mf-spinner"></span> Waiting for data…</div>`}
         </div>
+        ${mtd != null ? `
+        <div class="mf-kpi">
+          <div class="mf-kpi-label">MTD Return</div>
+          <div class="mf-kpi-value ${mtd >= 0 ? 'pos' : 'neg'}">${fmtPct(mtd)}</div>
+        </div>` : ''}
         ${ytd != null ? `
         <div class="mf-kpi">
           <div class="mf-kpi-label">YTD Return</div>
           <div class="mf-kpi-value ${ytd >= 0 ? 'pos' : 'neg'}">${fmtPct(ytd)}</div>
+        </div>` : ''}
+        ${oneY != null ? `
+        <div class="mf-kpi">
+          <div class="mf-kpi-label">1-Year Return</div>
+          <div class="mf-kpi-value ${oneY >= 0 ? 'pos' : 'neg'}">${fmtPct(oneY)}</div>
         </div>` : ''}
         ${positionsCount ? `
         <div class="mf-kpi">
@@ -659,14 +831,15 @@ function renderOverview() {
       </div>
 
       ${!selectedAcct && hasAccounts ? `
-      <h3 class="mf-section-title">Accounts <span class="mf-hint">click an account to filter</span></h3>
+      <h3 class="mf-section-title">Accounts <span class="mf-hint">click any card to filter — Total Portfolio resets</span></h3>
       <div class="mf-account-grid">
         ${visibleAccounts.map(a => `
-          <div class="mf-account-card ${a.id !== 'portfolio' ? 'mf-clickable' : ''}" ${a.id !== 'portfolio' ? `data-acct-id="${escHtml(a.id)}" role="button" tabindex="0"` : ''}>
+          <div class="mf-account-card mf-clickable" data-acct-id="${escHtml(a.id)}" role="button" tabindex="0">
             <div class="mf-account-name">${escHtml(a.name)}</div>
             <div class="mf-account-type">${escHtml(a.type || '')}</div>
             <div class="mf-account-value">${fmt$(a.value)}</div>
             ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
+            ${a.ytdReturn != null ? `<div class="mf-account-extra ${a.ytdReturn >= 0 ? 'pos' : 'neg'}">YTD ${fmtPct(a.ytdReturn)}</div>` : ''}
             ${a.unrealizedGL != null ? `<div class="mf-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
           </div>
         `).join('')}
@@ -1287,50 +1460,73 @@ function escHtml(s) {
 }
 
 // ── Allocation donut chart (pure canvas, no dependencies) ───────────────────
+function classifyPosition(p) {
+  // Use the LPL asset-class field if present; otherwise infer from symbol/name
+  if (p.assetClass) return p.assetClass;
+  const text = `${p.symbol || ''} ${p.name || ''}`.toUpperCase();
+  if (/CASH|MONEY MKT|MONEY MARKET|MMKT|FDIC|SWEEP/.test(text)) return 'Cash and Cash Equivalents';
+  if (/\bETF\b|\bFUND\b|TRUST|ISHARES|VANGUARD|SPDR/.test(text)) return 'Mutual Funds, ETPs, and CIs';
+  if (/BOND|NOTE|TREASUR|BILL|GOV/.test(text)) return 'Fixed Income';
+  return 'Uncategorized';
+}
+
+function buildAllocationGroups(positions) {
+  // Strict grouping by asset class — no top-N truncation. Within each group
+  // we keep the position list so users can drill in.
+  const groups = {};
+  for (const p of positions) {
+    const cls = classifyPosition(p);
+    if (!groups[cls]) groups[cls] = { total: 0, items: [] };
+    groups[cls].total += (p.value || 0);
+    groups[cls].items.push(p);
+  }
+  // Sort categories by total descending
+  return Object.entries(groups)
+    .map(([label, g]) => ({ label, total: g.total, items: g.items }))
+    .sort((a, b) => b.total - a.total);
+}
+
 function renderAllocationChart() {
   const canvas = document.getElementById('mf-alloc-chart');
-  const positions = filteredPositions();
+  const positions = accountFilteredPositions();
   if (!canvas || !positions.length) return;
 
   const ctx = canvas.getContext('2d');
   const total = positions.reduce((s, p) => s + (p.value || 0), 0);
   if (total === 0) return;
 
-  // Group by asset class or top-10 by value
-  const grouped = {};
-  const sorted = [...positions].sort((a, b) => (b.value || 0) - (a.value || 0));
-  const top = sorted.slice(0, 9);
-  const other = sorted.slice(9);
-
-  for (const p of top) {
-    const label = p.assetClass || p.symbol || 'Other';
-    grouped[label] = (grouped[label] || 0) + (p.value || 0);
-  }
-  if (other.length) {
-    grouped['Other'] = other.reduce((s, p) => s + (p.value || 0), 0);
-  }
+  const groups = buildAllocationGroups(positions);
 
   const colors = ['#6366f1','#8b5cf6','#a78bfa','#c4b5fd','#818cf8',
                    '#4f46e5','#7c3aed','#5b21b6','#4338ca','#64748b'];
 
-  const entries = Object.entries(grouped);
   const cx = 110, cy = 110, r = 90, hole = 52;
   let angle = -Math.PI / 2;
+  const slices = []; // for hit-testing
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  entries.forEach(([label, val], i) => {
-    const slice = (val / total) * 2 * Math.PI;
+  const highlightLabel = state.selectedAssetClass;
+
+  groups.forEach((g, i) => {
+    const sliceAngle = (g.total / total) * 2 * Math.PI;
+    const isHighlighted = highlightLabel === g.label;
+    const isDimmed = highlightLabel && !isHighlighted;
+    const startAngle = angle;
+    const endAngle = angle + sliceAngle;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, r, angle, angle + slice);
+    ctx.arc(cx, cy, r + (isHighlighted ? 4 : 0), startAngle, endAngle);
     ctx.closePath();
     ctx.fillStyle = colors[i % colors.length];
+    ctx.globalAlpha = isDimmed ? 0.35 : 1;
     ctx.fill();
+    ctx.globalAlpha = 1;
     ctx.strokeStyle = '#0f172a';
     ctx.lineWidth = 2;
     ctx.stroke();
-    angle += slice;
+    slices.push({ label: g.label, start: startAngle, end: endAngle, color: colors[i % colors.length] });
+    angle = endAngle;
   });
 
   // Hole
@@ -1346,23 +1542,77 @@ function renderAllocationChart() {
   ctx.fillText(fmt$(total), cx, cy - 4);
   ctx.font = '11px system-ui';
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText('Total', cx, cy + 14);
+  ctx.fillText(highlightLabel ? 'Filtered' : 'Total', cx, cy + 14);
 
-  // Legend
-  const lx = 240, ly = 20;
-  entries.forEach(([label, val], i) => {
+  // Legend — every category, full name, value + %
+  const lx = 240, ly = 14;
+  ctx.font = '12px system-ui';
+  groups.forEach((g, i) => {
     const y = ly + i * 22;
+    const isHighlighted = highlightLabel === g.label;
+    const isDimmed = highlightLabel && !isHighlighted;
+    ctx.globalAlpha = isDimmed ? 0.4 : 1;
     ctx.fillStyle = colors[i % colors.length];
     ctx.fillRect(lx, y, 12, 12);
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '12px system-ui';
+    ctx.fillStyle = isHighlighted ? '#f1f5f9' : '#cbd5e1';
+    ctx.font = (isHighlighted ? 'bold ' : '') + '12px system-ui';
     ctx.textAlign = 'left';
-    ctx.fillText(`${label}`, lx + 18, y + 11);
+    // Truncate label to fit
+    const maxLabelWidth = 200;
+    let label = g.label;
+    while (ctx.measureText(label).width > maxLabelWidth && label.length > 4) {
+      label = label.slice(0, -2);
+    }
+    if (label !== g.label) label += '…';
+    ctx.fillText(label, lx + 18, y + 11);
     ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px system-ui';
     ctx.textAlign = 'right';
-    ctx.fillText(fmtPct((val / total) * 100), lx + 160, y + 11);
+    ctx.fillText(fmtPct((g.total / total) * 100), lx + 270, y + 11);
+    ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
   });
+
+  // Wire up click hit-testing once per canvas instance
+  if (!canvas.dataset.mfWired) {
+    canvas.dataset.mfWired = '1';
+    canvas.style.cursor = 'pointer';
+    canvas.title = 'Click a slice to filter Holdings by asset class';
+    canvas.addEventListener('click', (e) => {
+      const slices = canvas.__mfSlices;
+      if (!slices || !slices.length) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      const dx = x - 110, dy = y - 110;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > 95 || dist < 52) return; // outside the donut ring
+      // Convert atan2 result to match drawing convention (start at -π/2, sweep CW positive)
+      let a = Math.atan2(dy, dx);
+      // Normalize to [-π/2, 3π/2) so it lines up with stored slice ranges
+      while (a < -Math.PI / 2) a += 2 * Math.PI;
+      while (a >= 3 * Math.PI / 2) a -= 2 * Math.PI;
+      const hit = slices.find(s => a >= s.start && a < s.end);
+      if (!hit) return;
+      // Toggle: clicking the active slice clears the filter
+      if (state.selectedAssetClass === hit.label) {
+        state.selectedAssetClass = null;
+      } else {
+        state.selectedAssetClass = hit.label;
+        // Jump to Holdings if we aren't already there
+        if (state.activeTab !== 'holdings') {
+          state.activeTab = 'holdings';
+          document.querySelectorAll('.mf-tab').forEach(b => {
+            b.classList.toggle('active', b.dataset.tab === 'holdings');
+          });
+        }
+      }
+      renderContent();
+    });
+  }
+  canvas.__mfSlices = slices;
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────
