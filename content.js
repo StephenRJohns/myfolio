@@ -2320,13 +2320,23 @@ function renderPerformance() {
   const allBenchmarksLoaded = activeBenchmarks.length > 0 && benchmarkRows.every(b => b.series);
 
   // Portfolio period returns — Modified Dietz so deposits/withdrawals are not
-  // counted as investment gains. Falls back to simple pct when no transactions
-  // are available (same behaviour as the Overview KPIs).
+  // counted as investment gains. For periods where Modified Dietz can't compute
+  // (history doesn't reach the period start), fall back to the brokerage's own
+  // figures which are true TWR.
   const perf = state.performance;
   const portfolioTxns = filteredTransactions();
-  const portfolioReturns = hasPortfolioHistory
+  const calcReturns = hasPortfolioHistory
     ? periodFramesAccurate(dailyValues, portfolioTxns)
-    : { ytd: selectedAcct ? (selectedAcct.ytdReturn ?? null) : (perf.ytdReturn ?? perf.ytd ?? null), oneY: null, threeY: null, fiveY: null };
+    : { ytd: null, oneY: null, threeY: null, fiveY: null };
+  const brokerYtd = selectedAcct
+    ? (selectedAcct.ytdReturn ?? null)
+    : (perf.ytdReturn ?? perf.ytd ?? null);
+  const portfolioReturns = {
+    ytd:    calcReturns.ytd    ?? brokerYtd,
+    oneY:   calcReturns.oneY   ?? (perf.oneYearReturn ?? perf['1y'] ?? null),
+    threeY: calcReturns.threeY ?? (perf.threeYearReturn ?? perf['3y'] ?? null),
+    fiveY:  calcReturns.fiveY  ?? (perf.fiveYearReturn ?? perf['5y'] ?? null),
+  };
 
   const hasAnyReturns = portfolioReturns.ytd != null || hasAnyBenchmarkData;
   const portfolioLabel = selectedAcct ? selectedAcct.name : 'Your Portfolio';
@@ -2492,6 +2502,32 @@ function drawPortfolioValueChart() {
   drawXAxisDates(ctx, vals.map(v => v.date), xOf, H);
 }
 
+// Build a cash-flow-adjusted growth series starting at startAmount.
+// Uses daily end-of-day Modified Dietz: r = (EV - BV - CF) / BV, where CF is
+// any external deposit or withdrawal on that day. This isolates investment
+// performance so deposits don't appear as gains in the chart.
+function buildTwrSeries(dailyValues, transactions, startAmount = 10000) {
+  if (!dailyValues || dailyValues.length < 2) return [];
+  const cfByDate = {};
+  for (const t of transactions || []) {
+    if (!isCashFlow(t)) continue;
+    if (!t.date) continue;
+    cfByDate[t.date] = (cfByDate[t.date] || 0) + (t.amount || 0);
+  }
+  const result = [{ date: dailyValues[0].date, close: startAmount }];
+  let current = startAmount;
+  for (let i = 1; i < dailyValues.length; i++) {
+    const bv = dailyValues[i - 1].value;
+    const ev = dailyValues[i].value;
+    const cf = cfByDate[dailyValues[i].date] || 0;
+    if (bv > 0) {
+      current = Math.max(0, current * (1 + (ev - bv - cf) / bv));
+    }
+    result.push({ date: dailyValues[i].date, close: current });
+  }
+  return result;
+}
+
 // ── Growth of $10,000 (portfolio + benchmarks, normalized) ──────────────────
 function drawGrowthChart() {
   const canvas = document.getElementById('mf-perf-growth');
@@ -2525,14 +2561,16 @@ function drawGrowthChart() {
   const portfolioStart = portfolioSeries[0].date;
   const portfolioEnd = portfolioSeries[portfolioSeries.length - 1].date;
 
-  // Build series list: portfolio + each selected benchmark
+  // Build series list: portfolio + each selected benchmark.
+  // Portfolio uses chain-linked daily returns (cash-flow adjusted) so deposits
+  // don't appear as investment gains; benchmarks use raw price series.
   const selected = getSelectedBenchmarks();
   const selectedAcct = getSelectedAccount();
   const lines = [{
     label: selectedAcct ? selectedAcct.name : 'Your Portfolio',
     color: '#818cf8',
     width: 3,
-    series: portfolioSeries.map(d => ({ date: d.date, close: d.value })),
+    series: buildTwrSeries(portfolioSeries, filteredTransactions()),
   }];
 
   const benchmarkColors = ['#fb923c', '#34d399', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee', '#fbbf24', '#94a3b8', '#fda4af'];
