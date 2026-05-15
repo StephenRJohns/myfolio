@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.0';
+const MF_VERSION = 'v1.4.1';
 
 const state = {
   accounts: [],
@@ -307,6 +307,9 @@ function parseApiResponse(url, data) {
       if (all.length) {
         dbg('ok', `Intraday activityIntraDay: ${all.length} transactions`, all[0]);
         state.transactions = all;
+        // If account-vot already ran, re-synthesize so newly-arrived cash flows
+        // are factored into accounts that don't have native daily history.
+        if (state.dailyValues.length) synthesizeMissingAccountDailies();
         refreshOverlay();
       }
     }
@@ -379,6 +382,8 @@ function parseApiResponse(url, data) {
       if (sorted.length) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
         dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
+        // Fill in any accounts that have a current value but no daily history
+        synthesizeMissingAccountDailies();
         // Persist so the chart survives page reloads without revisiting Performance page
         const now = Date.now();
         safeStorageSet({
@@ -467,6 +472,60 @@ function backfillAccountValues() {
     patched++;
   }
   if (patched) dbg('ok', `Backfilled value for ${patched} account${patched > 1 ? 's' : ''} from account-vot daily values`);
+}
+
+// Synthesize a daily-value series for accounts that have a current value but
+// no daily history (the brokerage returned an empty dailyValues array). Walks
+// backwards from today's value, subtracting cash flows from later dates. The
+// result is added to the aggregate state.dailyValues so the portfolio chart
+// reflects the full portfolio, not just the subset with native history.
+function synthesizeMissingAccountDailies() {
+  if (!state.dailyValues.length || !state.accounts.length) return;
+  const dates = state.dailyValues.map(d => d.date);
+  let synthesizedCount = 0;
+  const addToAggregate = (dailySeries) => {
+    const aggMap = new Map(state.dailyValues.map(d => [d.date, d.value]));
+    for (const d of dailySeries) {
+      aggMap.set(d.date, (aggMap.get(d.date) || 0) + d.value);
+    }
+    state.dailyValues = Array.from(aggMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, value]) => ({ date, value }));
+  };
+
+  for (const acct of state.accounts) {
+    if (acct.id === 'portfolio') continue;
+    if (!acct.value || acct.value <= 0) continue;
+    const existing = state.accountDailyValues[acct.id];
+    if (existing && existing.length >= 2) continue;
+
+    // Gather this account's cash flows from the transactions list
+    const acctTxns = state.transactions.filter(t => t.accountId === acct.id && isCashFlow(t));
+    const cfList = [];
+    for (const t of acctTxns) {
+      const td = parseDateLoose(t.date);
+      if (td) cfList.push({ date: td, amount: t.amount || 0 });
+    }
+
+    // For each anchor date in the aggregate, account_value(date) =
+    // current_value - sum_of_cash_flows_strictly_after(date)
+    const synth = [];
+    for (const dateStr of dates) {
+      const dt = parseDateLoose(dateStr);
+      if (!dt) continue;
+      let after = 0;
+      for (const cf of cfList) { if (cf.date > dt) after += cf.amount; }
+      const v = acct.value - after;
+      if (v > 0) synth.push({ date: dateStr, value: v });
+    }
+    if (synth.length >= 2) {
+      state.accountDailyValues[acct.id] = synth;
+      addToAggregate(synth);
+      synthesizedCount++;
+      dbg('ok', `Synthesized ${synth.length} daily values for ${acct.name}`, { current: acct.value, cashFlows: cfList.length });
+    }
+  }
+  if (synthesizedCount) dbg('ok', `Aggregate daily values rebuilt with ${synthesizedCount} synthesized account series`);
 }
 
 // ── Brokerage-specific normalizers (observed response field names) ─
@@ -695,14 +754,10 @@ function buildOverlay() {
       // Overview chart period tab
       const periodBtn = e.target.closest('.mf-chart-period[data-chart-period]');
       if (periodBtn) {
+        e.preventDefault();
         e.stopPropagation();
         state.overviewChartPeriod = periodBtn.dataset.chartPeriod;
-        document.querySelectorAll('.mf-chart-period').forEach(b => b.classList.remove('active'));
-        periodBtn.classList.add('active');
-        const series = getOverviewChartSeries();
-        const s = getOverviewChartStats(series, filteredTransactions());
-        if (s) renderVotStats(s);
-        drawOverviewChart();
+        renderContent();
         return;
       }
 
@@ -1731,9 +1786,19 @@ async function loadBenchmarkSeries(ticker) {
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
     const url = `https://stooq.com/q/d/l/?s=${key}.us&d1=${fmt(start)}&d2=${fmt(end)}&i=d`;
 
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const text = await resp.text();
+    // Proxy through the service worker — MV3 content scripts use the host
+    // page's origin and Stooq doesn't allow CORS for accountview.lpl.com.
+    if (!extensionContextValid()) throw new Error('Extension not loaded');
+    const resp = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'MF_FETCH_TEXT', url }, (r) => {
+          try { void chrome.runtime?.lastError; } catch (e) {}
+          resolve(r || { ok: false, error: 'No response from background worker' });
+        });
+      } catch (e) { resolve({ ok: false, error: String(e.message || e) }); }
+    });
+    if (!resp.ok) throw new Error(resp.error || 'fetch failed');
+    const text = resp.text;
     const data = parseStooqCsv(text);
     if (!data.length) throw new Error('Empty or unparseable CSV');
 
@@ -2200,26 +2265,35 @@ function escHtml(s) {
 
 // ── Allocation donut chart (pure canvas, no dependencies) ───────────────────
 function classifyPosition(p) {
-  // Prefer broker-supplied class fields; fall back to symbol/name inference.
-  const broker = p.assetClass || p.broadAssetClass || p.assetCategory ||
-                 p.investmentType || p.securityType || p.category || '';
-  if (broker) return broker;
+  // First prefer a *granular* broker field (e.g. broadAssetClass returns
+  // "US Stocks"). Skip generic catch-all fields like investmentType, which
+  // typically returns "Mutual Funds, ETPs, and Closed-End Funds" — that's
+  // a wrapper category, not an asset class, and collapses everything into
+  // one bucket. We refine it below via text matching instead.
+  const granular = p.broadAssetClass || p.assetCategory || p.subAssetClass;
+  if (granular) return granular;
+
   const text = `${p.symbol || ''} ${p.name || ''}`.toUpperCase();
-  // Cash & equivalents
-  if (/CASH|MONEY MKT|MONEY MARKET|MMKT|FDIC|SWEEP|FUNDS DEPOSITED/.test(text)) return 'Cash';
+
+  // Cash & equivalents (check first — money-market funds often match other regexes)
+  if (/CASH|MONEY MKT|MONEY MARKET|MMKT|MMF|FDIC|SWEEP|FUNDS DEPOSITED|GOVT MMK|GOVERNMENT MMK/.test(text)) return 'Cash';
   // Fixed income
-  if (/\bBOND\b|\bNOTE\b|TREASUR|\bBILL\b|MUNI|GOVT|GOVERNMENT|AGGREGATE|TIP[S]?\b|TLT|AGG/.test(text)) return 'Bonds';
-  // International equity
-  if (/INTERNATIONAL|FOREIGN|EUROPE|PACIFIC|EMERGING|GLOBAL EX|EX[- ]US|VXUS|EFA|VEU|IEFA|VWO|EEM/.test(text)) return 'Non-US Stocks';
+  if (/\bBOND\b|\bNOTE\b|TREASUR|\bBILL\b|MUNI|GOVT|GOVERNMENT|AGGREGATE BOND|\bTIPS?\b|\bTLT\b|\bAGG\b|FIXED INCOME|HIGH YIELD|CORP BOND|CORPORATE BOND|INTERMEDIATE TERM|SHORT TERM BOND/.test(text)) return 'Bonds';
+  // International / non-US equity
+  if (/INTERNATIONAL|FOREIGN|EUROPE|PACIFIC|EMERGING|GLOBAL EX|EX[- ]US|\bVXUS\b|\bEFA\b|\bVEU\b|\bIEFA\b|\bVWO\b|\bEEM\b|WORLD EX|DEVELOPED MKT|EMERGING MKT|ACWI|MSCI EAFE/.test(text)) return 'Non-US Stocks';
   // Real estate
-  if (/REAL ESTATE|REIT|VNQ|IYR|RWR/.test(text)) return 'Real Estate';
-  // Commodities / gold
-  if (/GOLD|GLD|IAU|COMMODIT|SILVER|SLV/.test(text)) return 'Commodities';
-  // Balanced / target-date / lifecycle
-  if (/BALANCED|TARGET|LIFECYCLE|RETIREMENT 20|ALL ASSET|MULTI-ASSET|ALLOCATION FUND/.test(text)) return 'Balanced';
-  // US equity (broad funds + visible US tickers)
-  if (/S&P|SPDR|VANGUARD|ISHARES|FIDELITY|SCHWAB|RUSSELL|TOTAL STOCK|TOTAL MARKET|GROWTH|VALUE|LARGE CAP|MID CAP|SMALL CAP|\bETF\b|\bFUND\b/.test(text)) return 'US Stocks';
-  return 'Uncategorized';
+  if (/REAL ESTATE|REIT\b|\bVNQ\b|\bIYR\b|\bRWR\b/.test(text)) return 'Real Estate';
+  // Commodities / metals
+  if (/\bGOLD\b|\bGLD\b|\bIAU\b|COMMODIT|SILVER|\bSLV\b|PRECIOUS METAL/.test(text)) return 'Commodities';
+  // Balanced / target-date / multi-asset
+  if (/BALANCED|TARGET DATE|TARGET RETIREMENT|LIFECYCLE|LIFE STRATEGY|RETIREMENT 20|ALL ASSET|MULTI[- ]ASSET|ALLOCATION FUND/.test(text)) return 'Balanced';
+  // US equity — broad funds, indexes, and "stock" mentions
+  if (/S&P|SPDR|VANGUARD|ISHARES|FIDELITY|SCHWAB|RUSSELL|TOTAL STOCK|TOTAL MARKET|US STOCK|U\.S\. STOCK|GROWTH FUND|VALUE FUND|LARGE CAP|MID CAP|SMALL CAP|EQUITY INCOME|DIVIDEND|\bSPY\b|\bVTI\b|\bIVV\b|\bQQQ\b|\bIWM\b|EQUITY FUND/.test(text)) return 'US Stocks';
+  // Fund / ETF that didn't match a specific class — likely US Stocks for most US investors
+  if (/\bETF\b|\bFUND\b|TRUST|PORTFOLIO/.test(text)) return 'US Stocks';
+
+  // Last resort: use any broker-supplied generic class
+  return p.assetClass || p.investmentType || p.securityType || 'Uncategorized';
 }
 
 function buildAllocationGroups(positions) {

@@ -1,13 +1,16 @@
 {
   "manifest_version": 3,
   "name": "MyFolio",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "A cleaner, modern dashboard overlay for your retirement account. Personal-use tool, no data leaves your browser.",
   "permissions": ["storage", "scripting"],
   "host_permissions": [
     "https://accountview.lpl.com/*",
     "https://stooq.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://accountview.lpl.com/*"],
