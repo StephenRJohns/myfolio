@@ -1323,21 +1323,23 @@ function parseDateLoose(d) {
 // Compute MTD / YTD / 1-Year returns from a [{date, value}] series.
 // Returns null for any frame where there isn't enough history.
 function periodFramesFromSeries(dv) {
-  if (!dv || dv.length < 2) return { mtd: null, ytd: null, oneY: null };
+  if (!dv || dv.length < 2) return { mtd: null, ytd: null, oneY: null, threeY: null, fiveY: null };
 
   // Pre-parse dates once; drop entries where parsing fails
   const parsed = dv.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
                    .filter(d => d.date && d.value != null);
   if (parsed.length < 2) {
     dbg('warn', 'periodFramesFromSeries: could not parse enough dates', { sample: dv.slice(0, 3) });
-    return { mtd: null, ytd: null, oneY: null };
+    return { mtd: null, ytd: null, oneY: null, threeY: null, fiveY: null };
   }
   const latest = parsed[parsed.length - 1];
   const latestDate = latest.date;
 
-  const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
-  const yearStart  = new Date(latestDate.getFullYear(), 0, 1);
-  const oneYearAgo = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+  const monthStart  = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
+  const yearStart   = new Date(latestDate.getFullYear(), 0, 1);
+  const oneYearAgo  = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+  const threeYearAgo = new Date(latestDate.getFullYear() - 3, latestDate.getMonth(), latestDate.getDate());
+  const fiveYearAgo  = new Date(latestDate.getFullYear() - 5, latestDate.getMonth(), latestDate.getDate());
 
   // Walk backwards to find the latest bar STRICTLY BEFORE the boundary date.
   // If no such bar exists, returns null (period is unknowable).
@@ -1350,9 +1352,11 @@ function periodFramesFromSeries(dv) {
   const pct = s => (s && s.value > 0) ? ((latest.value - s.value) / s.value) * 100 : null;
 
   return {
-    mtd:  pct(findBaseline(monthStart)),
-    ytd:  pct(findBaseline(yearStart)),
-    oneY: pct(findBaseline(oneYearAgo)),
+    mtd:    pct(findBaseline(monthStart)),
+    ytd:    pct(findBaseline(yearStart)),
+    oneY:   pct(findBaseline(oneYearAgo)),
+    threeY: pct(findBaseline(threeYearAgo)),
+    fiveY:  pct(findBaseline(fiveYearAgo)),
   };
 }
 
@@ -1461,14 +1465,16 @@ function modifiedDietzReturn(series, transactions, periodStart) {
 // own per-account PeriodTotalReturn (true TWR) is still preferred — this
 // function provides MTD and 1Y, plus a YTD fallback if LPL didn't supply one.
 function periodFramesAccurate(series, transactions) {
-  if (!series || series.length < 2) return { mtd: null, ytd: null, oneY: null };
+  if (!series || series.length < 2) return { mtd: null, ytd: null, oneY: null, threeY: null, fiveY: null };
   const parsed = series.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
                        .filter(d => d.date && d.value != null);
-  if (parsed.length < 2) return { mtd: null, ytd: null, oneY: null };
+  if (parsed.length < 2) return { mtd: null, ytd: null, oneY: null, threeY: null, fiveY: null };
   const latestDate = parsed[parsed.length - 1].date;
-  const monthStart = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
-  const yearStart  = new Date(latestDate.getFullYear(), 0, 1);
-  const oneYearAgo = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+  const monthStart   = new Date(latestDate.getFullYear(), latestDate.getMonth(), 1);
+  const yearStart    = new Date(latestDate.getFullYear(), 0, 1);
+  const oneYearAgo   = new Date(latestDate.getFullYear() - 1, latestDate.getMonth(), latestDate.getDate());
+  const threeYearAgo = new Date(latestDate.getFullYear() - 3, latestDate.getMonth(), latestDate.getDate());
+  const fiveYearAgo  = new Date(latestDate.getFullYear() - 5, latestDate.getMonth(), latestDate.getDate());
 
   const simple = periodFramesFromSeries(series);
   const txns = transactions || [];
@@ -1478,9 +1484,11 @@ function periodFramesAccurate(series, transactions) {
     return r != null ? r : fallback;
   };
   return {
-    mtd:  md(monthStart, simple.mtd),
-    ytd:  md(yearStart, simple.ytd),
-    oneY: md(oneYearAgo, simple.oneY),
+    mtd:    md(monthStart, simple.mtd),
+    ytd:    md(yearStart, simple.ytd),
+    oneY:   md(oneYearAgo, simple.oneY),
+    threeY: md(threeYearAgo, simple.threeY),
+    fiveY:  md(fiveYearAgo, simple.fiveY),
   };
 }
 
@@ -1610,7 +1618,7 @@ const HELP_CONTENT = {
       </ul>
       <h4>About the math</h4>
       <ul>
-        <li>Overview KPIs use the <em>Modified Dietz</em> formula to adjust for deposits/withdrawals. The Period Returns table on this tab uses simple percentage change from the start to the end of the period as a faster approximation. Always cross-check against your official statements before acting.</li>
+        <li>The Period Returns table uses the <em>Modified Dietz</em> formula to adjust for deposits, withdrawals, and transfers — so a large contribution mid-year does not inflate the apparent return. When transaction history hasn't been captured yet, it falls back to simple percentage change. Always cross-check against your official statements before acting.</li>
       </ul>
     `,
   },
@@ -2311,10 +2319,13 @@ function renderPerformance() {
   const hasAnyBenchmarkData = benchmarkRows.some(b => b.series);
   const allBenchmarksLoaded = activeBenchmarks.length > 0 && benchmarkRows.every(b => b.series);
 
-  // Portfolio period returns — only show if we have either explicit performance data OR enough history
+  // Portfolio period returns — Modified Dietz so deposits/withdrawals are not
+  // counted as investment gains. Falls back to simple pct when no transactions
+  // are available (same behaviour as the Overview KPIs).
   const perf = state.performance;
+  const portfolioTxns = filteredTransactions();
   const portfolioReturns = hasPortfolioHistory
-    ? periodReturns(dailyValues.map(d => ({ date: d.date, close: d.value })))
+    ? periodFramesAccurate(dailyValues, portfolioTxns)
     : { ytd: selectedAcct ? (selectedAcct.ytdReturn ?? null) : (perf.ytdReturn ?? perf.ytd ?? null), oneY: null, threeY: null, fiveY: null };
 
   const hasAnyReturns = portfolioReturns.ytd != null || hasAnyBenchmarkData;
