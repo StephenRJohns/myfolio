@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.11';
+const MF_VERSION = 'v1.4.12';
 
 const state = {
   accounts: [],
@@ -356,14 +356,18 @@ function parseApiResponse(url, data) {
         if (!existing.has(key(t))) { existing.set(key(t), t); added++; }
       }
       state.transactions = Array.from(existing.values());
-      // Diagnostic: count unique transaction types so we can see which codes
-      // the brokerage uses for cash flows. Lands in the Debug tab for tuning.
+      // Diagnostic: count unique transaction types AND per-account distribution
+      // so we can see which codes the brokerage uses for cash flows and which
+      // account each transaction is tagged with.
       const typeCounts = {};
+      const accountCounts = {};
       for (const t of harvested) {
         const k = String(t.type || '').trim() || '(empty)';
         typeCounts[k] = (typeCounts[k] || 0) + 1;
+        const a = String(t.accountId || '').trim() || '(none)';
+        accountCounts[a] = (accountCounts[a] || 0) + 1;
       }
-      dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, { typeCounts, sample: harvested[0] });
+      dbg('ok', `Activity history: parsed ${harvested.length} rows, added ${added} new (total ${state.transactions.length})`, { typeCounts, accountCounts, sample: harvested[0] });
       // Re-synthesize accounts now that we may have the missing cash flows
       if (state.dailyValues.length) synthesizeMissingAccountDailies();
       refreshOverlay();
@@ -632,13 +636,20 @@ function synthesizeMissingAccountDailies() {
     // Gather this account's cash flows from the transactions list. Use
     // cashFlowImpact so security transfers (amount=0 but quantity>0) get
     // counted at their estimated dollar value.
-    const acctTxns = state.transactions.filter(t => t.accountId === acct.id && isCashFlow(t));
+    const allAcctTxns = state.transactions.filter(t => t.accountId === acct.id);
+    const acctTxns = allAcctTxns.filter(t => isCashFlow(t));
     const cfList = [];
+    const rejected = [];
     for (const t of acctTxns) {
       const td = parseDateLoose(t.date);
       const impact = cashFlowImpact(t);
-      if (td && Math.abs(impact) >= 0.01) cfList.push({ date: td, amount: impact });
+      if (td && Math.abs(impact) >= 0.01) {
+        cfList.push({ date: td, amount: impact });
+      } else {
+        rejected.push({ type: t.type, symbol: t.symbol, qty: t.quantity, amt: t.amount, reason: !td ? 'bad-date' : 'zero-impact' });
+      }
     }
+    dbg('info', `Synthesis for ${acct.name} (${acct.id}): ${allAcctTxns.length} txns, ${acctTxns.length} classified as cash flows, ${cfList.length} with non-zero impact (total $${cfList.reduce((s,cf)=>s+cf.amount,0).toFixed(2)})`, { cfSample: cfList.slice(0, 5).map(cf => ({d: cf.date.toISOString().slice(0,10), a: cf.amount.toFixed(2)})), rejected: rejected.slice(0, 5) });
 
     const synth = [];
     for (const dateStr of dates) {
@@ -805,8 +816,14 @@ function normalizeBrokeragePosition(p, parentAcct = null) {
 }
 
 function normalizeBrokerageTxn(t, parentAcct = null) {
+  // Prefer accountId from the transaction itself if present — the activity
+  // endpoint sometimes returns all rows under a single parent block but
+  // tags each row with its own accountId/accountNumber. Fall back to the
+  // parent block's id only when the row doesn't carry one.
+  const ownId = t.accountId || t.accountNumber;
+  const parentId = parentAcct && (parentAcct.accountId || parentAcct.accountNumber);
   return {
-    accountId: parentAcct ? String(parentAcct.accountId || parentAcct.accountNumber || '') : '',
+    accountId: String(ownId || parentId || ''),
     date: t.asOfDate || t.tradeDate || t.transactionDate || '',
     type: t.transCode || t.transactionType || t.activityType || '',
     symbol: t.symbolCusip || t.symbol || '',
@@ -1282,10 +1299,13 @@ function cashFlowImpact(txn) {
   if (!txn) return 0;
   // Plain cash transactions: use amount directly
   if (txn.amount && Math.abs(txn.amount) >= 0.01) return txn.amount;
-  // Security transfer: amount=0 but quantity != 0 — estimate value from
-  // the position's current price.
+  // Security transfer: amount=0 but quantity != 0 — estimate value using
+  // the position's current price. Look in the same account first, then any
+  // account (the inherited shares might not be tagged in the same account
+  // yet, and price is fungible across accounts anyway).
   if (txn.symbol && txn.quantity && Math.abs(txn.quantity) >= 0.001) {
-    const pos = state.positions.find(p => p.symbol === txn.symbol && p.accountId === txn.accountId);
+    let pos = state.positions.find(p => p.symbol === txn.symbol && p.accountId === txn.accountId);
+    if (!pos) pos = state.positions.find(p => p.symbol === txn.symbol);
     const price = (pos && pos.price) || txn.price || 0;
     if (price > 0) {
       // Direction: positive quantity = inflow, negative = outflow
