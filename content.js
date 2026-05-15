@@ -2,7 +2,7 @@
 // Copyright (c) 2026 JJJJJ Enterprises, LLC. All rights reserved.
 // Licensed under the MyFolio Proprietary Software License (see LICENSE).
 //
-// Listens for API captures from interceptor.js, parses LPL AccountView data,
+// Listens for API captures from interceptor.js, parses brokerage account data,
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
@@ -58,18 +58,18 @@ function recordLoadTime(ms) {
 window.addEventListener('message', (event) => {
   if (event.source !== window) return;
   const msg = event.data;
-  if (!msg?.type?.startsWith('LPL_')) return;
+  if (!msg?.type?.startsWith('MF_')) return;
 
-  if (msg.type === 'LPL_NET') {
+  if (msg.type === 'MF_NET') {
     dbg('info', `${msg.ok ? '✔' : '✘'} ${msg.status}  ${msg.url}`);
-  } else if (msg.type === 'LPL_API') {
+  } else if (msg.type === 'MF_API') {
     const { url, data } = msg;
     const topKeys = data && typeof data === 'object' ? Object.keys(data) : [];
     dbg('info', `JSON body parsed`, { url, topKeys, type: Array.isArray(data) ? `array[${data.length}]` : typeof data });
     parseApiResponse(url, data);
-  } else if (msg.type === 'LPL_WS_OPEN') {
-    dbg('warn', `WebSocket opened — LPL may push data through this`, { url: msg.url });
-  } else if (msg.type === 'LPL_WS_MSG') {
+  } else if (msg.type === 'MF_WS_OPEN') {
+    dbg('warn', `WebSocket opened — data may flow through this`, { url: msg.url });
+  } else if (msg.type === 'MF_WS_MSG') {
     const topKeys = msg.data && typeof msg.data === 'object' ? Object.keys(msg.data) : [];
     dbg('info', `WebSocket message`, { url: msg.url, topKeys });
     if (msg.data && typeof msg.data === 'object') parseApiResponse(msg.url, msg.data);
@@ -98,7 +98,7 @@ function parseApiResponse(url, data) {
         unrealizedGL: null,
       };
       // Per-account entries
-      const accts = Array.isArray(cd.accounts) ? cd.accounts.map(normalizeLplAccount) : [];
+      const accts = Array.isArray(cd.accounts) ? cd.accounts.map(normalizeBrokerageAccount) : [];
       state.accounts = accts.length ? [portfolio, ...accts] : [portfolio];
       dbg('ok', `AccountInfo: portfolio $${cd.portfolioBalance}, ${accts.length} accounts`, { dayChange: cd.dayChange, dayChangePct: cd.dayChangePercentage });
       refreshOverlay();
@@ -115,7 +115,7 @@ function parseApiResponse(url, data) {
       for (const acct of acctList) {
         if (Array.isArray(acct.position)) {
           for (const p of acct.position) {
-            all.push(normalizeLplPosition(p));
+            all.push(normalizeBrokeragePosition(p));
           }
         }
       }
@@ -153,7 +153,7 @@ function parseApiResponse(url, data) {
       const all = [];
       for (const acct of pid.account) {
         if (Array.isArray(acct.position)) {
-          for (const p of acct.position) all.push(normalizeLplPosition(p));
+          for (const p of acct.position) all.push(normalizeBrokeragePosition(p));
         }
       }
       if (all.length) {
@@ -169,7 +169,7 @@ function parseApiResponse(url, data) {
       const all = [];
       for (const acct of actd.accounts) {
         if (Array.isArray(acct.activities)) {
-          for (const t of acct.activities) all.push(normalizeLplTxn(t));
+          for (const t of acct.activities) all.push(normalizeBrokerageTxn(t));
         }
       }
       if (all.length) {
@@ -209,7 +209,7 @@ function parseApiResponse(url, data) {
         state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
         dbg('ok', `account-vot: ${sorted.length} daily values`, sorted[sorted.length - 1]);
       } else {
-        dbg('info', 'account-vot: no dailyValues (may need to select a longer date range in LPL)');
+        dbg('info', 'account-vot: no dailyValues (may need a longer date range)');
       }
 
       refreshOverlay();
@@ -225,7 +225,7 @@ function parseApiResponse(url, data) {
   updateStatusBar();
 }
 
-// ── Normalizers (handle various LPL field name conventions) ─────────────────
+// ── Normalizers (handle various brokerage field name conventions) ───────────
 function normalizeAccount(a) {
   return {
     id: a.accountId || a.id || a.accountNumber || '',
@@ -275,8 +275,8 @@ function flattenPerf(data) {
   return out;
 }
 
-// ── LPL-specific normalizers (field names from awsp.myaccountviewonline.com) ─
-function normalizeLplAccount(a) {
+// ── Brokerage-specific normalizers (field names from awsp.myaccountviewonline.com) ─
+function normalizeBrokerageAccount(a) {
   return {
     id: String(a.accountId || a.accountNumber || ''),
     name: a.accountName || a.nickName || a.accountNumber || '',
@@ -289,9 +289,9 @@ function normalizeLplAccount(a) {
   };
 }
 
-function normalizeLplPosition(p) {
+function normalizeBrokeragePosition(p) {
   return {
-    // Real LPL field names from debug log
+    // Real field names from observed responses
     symbol: p.symbolCusip || p.symbol || p.cusip || '',
     name: (p.description || p.longName || '').replace(/\r\n/g, ' ').replace(/\s+/g, ' ').trim(),
     quantity: toNum(p.quantity ?? p.shares ?? 0),
@@ -305,7 +305,7 @@ function normalizeLplPosition(p) {
   };
 }
 
-function normalizeLplTxn(t) {
+function normalizeBrokerageTxn(t) {
   return {
     date: t.asOfDate || t.tradeDate || t.transactionDate || '',
     type: t.transCode || t.transactionType || t.activityType || '',
@@ -334,9 +334,9 @@ function toNum(v) {
 
 // ── Overlay lifecycle ────────────────────────────────────────────────────────
 function injectToggleButton() {
-  if (document.getElementById('lpl-toggle-btn')) return;
+  if (document.getElementById('mf-toggle-btn')) return;
   const btn = document.createElement('button');
-  btn.id = 'lpl-toggle-btn';
+  btn.id = 'mf-toggle-btn';
   btn.textContent = '◆ MyFolio View';
   btn.title = 'Switch to MyFolio dashboard';
   btn.addEventListener('click', toggleOverlay);
@@ -344,23 +344,23 @@ function injectToggleButton() {
 }
 
 function setToggleLabel(open) {
-  const btn = document.getElementById('lpl-toggle-btn');
+  const btn = document.getElementById('mf-toggle-btn');
   if (!btn) return;
   btn.textContent = open ? '◆ Standard View' : '◆ MyFolio View';
-  btn.title = open ? 'Return to standard LPL view' : 'Switch to MyFolio dashboard';
+  btn.title = open ? 'Return to standard brokerage view' : 'Switch to MyFolio dashboard';
 }
 
 function toggleOverlay() {
   state.overlayOpen = !state.overlayOpen;
-  const overlay = document.getElementById('lpl-overlay');
-  if (overlay) overlay.classList.toggle('lpl-hidden', !state.overlayOpen);
+  const overlay = document.getElementById('mf-overlay');
+  if (overlay) overlay.classList.toggle('mf-hidden', !state.overlayOpen);
   if (state.overlayOpen && !overlay) buildOverlay();
   setToggleLabel(state.overlayOpen);
 }
 
 function refreshOverlay() {
   if (!state.overlayOpen) return;
-  const overlay = document.getElementById('lpl-overlay');
+  const overlay = document.getElementById('mf-overlay');
   if (!overlay) buildOverlay();
   else renderContent();
 }
@@ -368,35 +368,35 @@ function refreshOverlay() {
 function buildOverlay() {
   state.loadStart = Date.now();
   const overlay = document.createElement('div');
-  overlay.id = 'lpl-overlay';
+  overlay.id = 'mf-overlay';
   overlay.innerHTML = `
-    <div class="lpl-topbar">
-      <div class="lpl-logo">◆ MyFolio</div>
-      <nav class="lpl-nav">
-        <button class="lpl-tab active" data-tab="overview">Overview</button>
-        <button class="lpl-tab" data-tab="holdings">Holdings</button>
-        <button class="lpl-tab" data-tab="transactions">Transactions</button>
-        <button class="lpl-tab" data-tab="performance">Performance</button>
+    <div class="mf-topbar">
+      <div class="mf-logo">◆ MyFolio</div>
+      <nav class="mf-nav">
+        <button class="mf-tab active" data-tab="overview">Overview</button>
+        <button class="mf-tab" data-tab="holdings">Holdings</button>
+        <button class="mf-tab" data-tab="transactions">Transactions</button>
+        <button class="mf-tab" data-tab="performance">Performance</button>
       </nav>
-      <button class="lpl-close" id="lpl-close-btn" title="Close">✕</button>
+      <button class="mf-close" id="mf-close-btn" title="Close">✕</button>
     </div>
-    <div class="lpl-statusbar" id="lpl-statusbar">
-      <span class="lpl-spinner"></span>
-      <span id="lpl-status-text">Listening for data…</span>
-      <button class="lpl-reload-btn" id="lpl-reload-btn" title="Reload page to re-capture data">↺ Reload page</button>
+    <div class="mf-statusbar" id="mf-statusbar">
+      <span class="mf-spinner"></span>
+      <span id="mf-status-text">Listening for data…</span>
+      <button class="mf-reload-btn" id="mf-reload-btn" title="Reload page to re-capture data">↺ Reload page</button>
     </div>
-    <div class="lpl-progress" id="lpl-progress">
-      <div class="lpl-progress-fill" id="lpl-progress-fill"></div>
+    <div class="mf-progress" id="mf-progress">
+      <div class="mf-progress-fill" id="mf-progress-fill"></div>
     </div>
-    <div class="lpl-body" id="lpl-body"></div>
+    <div class="mf-body" id="mf-body"></div>
   `;
   document.body.appendChild(overlay);
 
-  document.getElementById('lpl-close-btn').addEventListener('click', toggleOverlay);
-  document.getElementById('lpl-reload-btn').addEventListener('click', () => location.reload());
-  overlay.querySelectorAll('.lpl-tab').forEach(btn => {
+  document.getElementById('mf-close-btn').addEventListener('click', toggleOverlay);
+  document.getElementById('mf-reload-btn').addEventListener('click', () => location.reload());
+  overlay.querySelectorAll('.mf-tab').forEach(btn => {
     btn.addEventListener('click', () => {
-      overlay.querySelectorAll('.lpl-tab').forEach(b => b.classList.remove('active'));
+      overlay.querySelectorAll('.mf-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.activeTab = btn.dataset.tab;
       renderContent();
@@ -410,9 +410,9 @@ function buildOverlay() {
 
 // ── Status bar ──────────────────────────────────────────────────────────────
 function updateStatusBar() {
-  const el = document.getElementById('lpl-status-text');
-  const bar = document.getElementById('lpl-statusbar');
-  const spinner = bar?.querySelector('.lpl-spinner');
+  const el = document.getElementById('mf-status-text');
+  const bar = document.getElementById('mf-statusbar');
+  const spinner = bar?.querySelector('.mf-spinner');
   if (!el || !bar) return;
 
   const hasData = state.accounts.length || state.positions.length || state.transactions.length;
@@ -424,10 +424,10 @@ function updateStatusBar() {
     if (state.transactions.length) parts.push(`${state.transactions.length} transactions`);
     const elapsed = state.loadStart ? ((Date.now() - state.loadStart) / 1000).toFixed(1) : '?';
     el.textContent = `Loaded in ${elapsed}s — ${parts.join(' · ')}`;
-    bar.classList.remove('lpl-status-warn');
-    bar.classList.add('lpl-status-ok');
-    if (spinner) spinner.classList.add('lpl-spinner-done');
-    const prog = document.getElementById('lpl-progress');
+    bar.classList.remove('mf-status-warn');
+    bar.classList.add('mf-status-ok');
+    if (spinner) spinner.classList.add('mf-spinner-done');
+    const prog = document.getElementById('mf-progress');
     if (prog) prog.style.display = 'none';
     return;
   }
@@ -435,7 +435,7 @@ function updateStatusBar() {
   // Still waiting — compute ETA
   const elapsedMs = state.loadStart ? Date.now() - state.loadStart : 0;
   const elapsedS = Math.round(elapsedMs / 1000);
-  bar.classList.remove('lpl-status-ok');
+  bar.classList.remove('mf-status-ok');
 
   const avg = state.avgLoadMs;
   const STUCK_THRESHOLD = avg ? Math.max(avg * 2, 45000) : 60000; // 2x avg or 60s floor
@@ -448,8 +448,8 @@ function updateStatusBar() {
     el.textContent = avg
       ? `Stuck — ${elapsed} elapsed (usually loads in ${fmtSec(avg)}). Try ↺ Reload page.`
       : `Stuck — ${elapsed} with no data. Try ↺ Reload page.`;
-    bar.classList.add('lpl-status-warn');
-    if (spinner) spinner.classList.remove('lpl-spinner-done');
+    bar.classList.add('mf-status-warn');
+    if (spinner) spinner.classList.remove('mf-spinner-done');
   } else if (avg) {
     // ETA available
     const etaMs = avg - elapsedMs;
@@ -459,7 +459,7 @@ function updateStatusBar() {
     el.textContent = etaS > 0
       ? `Loading… ${elapsedS}s elapsed · avg ${fmtSec(avg)} · ~${fmtSec(etaMs)} remaining${callNote}`
       : `Almost there… ${elapsedS}s elapsed (avg ${fmtSec(avg)})${callNote}`;
-    bar.classList.remove('lpl-status-warn');
+    bar.classList.remove('mf-status-warn');
     setProgressWidth(pct);
   } else {
     // No history yet
@@ -467,9 +467,9 @@ function updateStatusBar() {
     el.textContent = elapsedS > 8
       ? `${elapsedS}s — ${callNote} (first session, no ETA yet)`
       : callNote;
-    if (elapsedMs > 30000) bar.classList.add('lpl-status-warn');
-    else bar.classList.remove('lpl-status-warn');
-    if (spinner) spinner.classList.remove('lpl-spinner-done');
+    if (elapsedMs > 30000) bar.classList.add('mf-status-warn');
+    else bar.classList.remove('mf-status-warn');
+    if (spinner) spinner.classList.remove('mf-spinner-done');
   }
 }
 
@@ -479,7 +479,7 @@ function fmtSec(ms) {
 }
 
 function setProgressWidth(pct) {
-  const bar = document.getElementById('lpl-progress-fill');
+  const bar = document.getElementById('mf-progress-fill');
   if (bar) bar.style.width = pct + '%';
 }
 
@@ -492,7 +492,7 @@ setInterval(() => {
 
 // ── Tab renderers ────────────────────────────────────────────────────────────
 function renderContent() {
-  const body = document.getElementById('lpl-body');
+  const body = document.getElementById('mf-body');
   if (!body) return;
   const tab = state.activeTab || 'overview';
   if (tab === 'overview') body.innerHTML = renderOverview();
@@ -511,57 +511,57 @@ function renderOverview() {
   const hasAccounts = state.accounts.length > 0;
 
   return `
-    <div class="lpl-section">
-      <div class="lpl-kpi-row">
-        <div class="lpl-kpi">
-          <div class="lpl-kpi-label">Total Portfolio Value</div>
-          <div class="lpl-kpi-value">${hasAccounts ? fmt$(total) : '—'}</div>
-          ${hasAccounts ? `<div class="lpl-kpi-sub ${totalChange >= 0 ? 'pos' : 'neg'}">${totalChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(totalChange))} (${fmtPct(changePct)}) today</div>` : `<div class="lpl-kpi-waiting"><span class="lpl-spinner"></span> Waiting for data…</div>`}
+    <div class="mf-section">
+      <div class="mf-kpi-row">
+        <div class="mf-kpi">
+          <div class="mf-kpi-label">Total Portfolio Value</div>
+          <div class="mf-kpi-value">${hasAccounts ? fmt$(total) : '—'}</div>
+          ${hasAccounts ? `<div class="mf-kpi-sub ${totalChange >= 0 ? 'pos' : 'neg'}">${totalChange >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(totalChange))} (${fmtPct(changePct)}) today</div>` : `<div class="mf-kpi-waiting"><span class="mf-spinner"></span> Waiting for data…</div>`}
         </div>
         ${state.performance.ytdReturn != null ? `
-        <div class="lpl-kpi">
-          <div class="lpl-kpi-label">YTD Return</div>
-          <div class="lpl-kpi-value ${state.performance.ytdReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(state.performance.ytdReturn)}</div>
+        <div class="mf-kpi">
+          <div class="mf-kpi-label">YTD Return</div>
+          <div class="mf-kpi-value ${state.performance.ytdReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(state.performance.ytdReturn)}</div>
         </div>` : ''}
         ${state.positions.length ? `
-        <div class="lpl-kpi">
-          <div class="lpl-kpi-label">Positions</div>
-          <div class="lpl-kpi-value">${state.positions.length}</div>
+        <div class="mf-kpi">
+          <div class="mf-kpi-label">Positions</div>
+          <div class="mf-kpi-value">${state.positions.length}</div>
         </div>` : ''}
       </div>
 
       ${hasAccounts ? `
-      <h3 class="lpl-section-title">Accounts</h3>
-      <div class="lpl-account-grid">
+      <h3 class="mf-section-title">Accounts</h3>
+      <div class="mf-account-grid">
         ${state.accounts.map(a => `
-          <div class="lpl-account-card">
-            <div class="lpl-account-name">${a.name}</div>
-            <div class="lpl-account-type">${a.type}</div>
-            <div class="lpl-account-value">${fmt$(a.value)}</div>
-            ${a.change != null ? `<div class="lpl-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
-            ${a.unrealizedGL != null ? `<div class="lpl-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
+          <div class="mf-account-card">
+            <div class="mf-account-name">${a.name}</div>
+            <div class="mf-account-type">${a.type}</div>
+            <div class="mf-account-value">${fmt$(a.value)}</div>
+            ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
+            ${a.unrealizedGL != null ? `<div class="mf-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
           </div>
         `).join('')}
-      </div>` : `<div class="lpl-empty">Waiting for account data — navigate to your account overview page.</div>`}
+      </div>` : `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>`}
 
       ${state.positions.length ? `
-      <h3 class="lpl-section-title">Allocation</h3>
-      <canvas id="lpl-alloc-chart" width="400" height="220"></canvas>` : ''}
+      <h3 class="mf-section-title">Allocation</h3>
+      <canvas id="mf-alloc-chart" width="400" height="220"></canvas>` : ''}
     </div>
   `;
 }
 
 function renderHoldings() {
-  if (!state.positions.length) return `<div class="lpl-empty">No holdings data captured yet. Navigate to your holdings page.</div>`;
+  if (!state.positions.length) return `<div class="mf-empty">No holdings data captured yet. Navigate to your holdings page.</div>`;
 
   const sorted = [...state.positions].sort((a, b) => (b.value || 0) - (a.value || 0));
   const total = sorted.reduce((s, p) => s + (p.value || 0), 0);
 
   return `
-    <div class="lpl-section">
-      <h3 class="lpl-section-title">Holdings <span class="lpl-badge">${sorted.length}</span></h3>
-      <canvas id="lpl-alloc-chart" width="400" height="220" style="margin-bottom:24px"></canvas>
-      <table class="lpl-table">
+    <div class="mf-section">
+      <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span></h3>
+      <canvas id="mf-alloc-chart" width="400" height="220" style="margin-bottom:24px"></canvas>
+      <table class="mf-table">
         <thead><tr>
           <th>Symbol</th><th>Name</th><th class="right">Qty</th>
           <th class="right">Price</th><th class="right">Value</th>
@@ -593,14 +593,14 @@ function renderHoldings() {
 }
 
 function renderTransactions() {
-  if (!state.transactions.length) return `<div class="lpl-empty">No transaction data captured yet. Navigate to your activity/history page.</div>`;
+  if (!state.transactions.length) return `<div class="mf-empty">No transaction data captured yet. Navigate to your activity/history page.</div>`;
 
   const sorted = [...state.transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   return `
-    <div class="lpl-section">
-      <h3 class="lpl-section-title">Recent Transactions <span class="lpl-badge">${sorted.length}</span></h3>
-      <table class="lpl-table">
+    <div class="mf-section">
+      <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span></h3>
+      <table class="mf-table">
         <thead><tr>
           <th>Date</th><th>Type</th><th>Symbol</th><th>Description</th>
           <th class="right">Qty</th><th class="right">Price</th><th class="right">Amount</th>
@@ -609,7 +609,7 @@ function renderTransactions() {
           ${sorted.map(t => `
             <tr>
               <td class="date">${fmtDate(t.date)}</td>
-              <td><span class="lpl-txn-badge ${t.type.toLowerCase()}">${t.type}</span></td>
+              <td><span class="mf-txn-badge ${t.type.toLowerCase()}">${t.type}</span></td>
               <td class="symbol">${t.symbol || '—'}</td>
               <td class="name">${t.description}</td>
               <td class="right">${t.quantity ? fmtNum(t.quantity) : '—'}</td>
@@ -754,21 +754,21 @@ function renderPerformance() {
   const hasAnyReturns = portfolioReturns.ytd != null || hasAnyBenchmarkData;
 
   return `
-    <div class="lpl-section">
+    <div class="mf-section">
       ${hasPortfolioHistory ? `
-        <h3 class="lpl-section-title">Portfolio Value Over Time</h3>
+        <h3 class="mf-section-title">Portfolio Value Over Time</h3>
         <canvas id="mf-perf-value" style="width:100%;display:block;margin-bottom:28px;height:260px"></canvas>
       ` : ''}
 
       ${hasPortfolioHistory && allBenchmarksLoaded ? `
-        <h3 class="lpl-section-title">Growth of $10,000</h3>
-        <p class="lpl-note" style="margin-top:-8px;margin-bottom:12px">Normalized to $10,000 invested at the start of available history. Compares your portfolio against selected benchmarks.</p>
+        <h3 class="mf-section-title">Growth of $10,000</h3>
+        <p class="mf-note" style="margin-top:-8px;margin-bottom:12px">Normalized to $10,000 invested at the start of available history. Compares your portfolio against selected benchmarks.</p>
         <canvas id="mf-perf-growth" style="width:100%;display:block;margin-bottom:28px;height:300px"></canvas>
       ` : ''}
 
       ${hasAnyReturns ? `
-        <h3 class="lpl-section-title">Period Returns</h3>
-        <table class="lpl-table" style="margin-bottom:24px">
+        <h3 class="mf-section-title">Period Returns</h3>
+        <table class="mf-table" style="margin-bottom:24px">
           <thead><tr>
             <th>Portfolio / Benchmark</th>
             <th class="right">YTD</th>
@@ -800,21 +800,21 @@ function renderPerformance() {
         </table>
       ` : ''}
 
-      <h3 class="lpl-section-title">Compare Against</h3>
-      <div class="lpl-bm-picker" id="mf-bm-picker">
+      <h3 class="mf-section-title">Compare Against</h3>
+      <div class="mf-bm-picker" id="mf-bm-picker">
         ${ALL_BENCHMARKS.map(b => `
-          <label class="lpl-bm-chip ${selected.includes(b.id) ? 'active' : ''}">
+          <label class="mf-bm-chip ${selected.includes(b.id) ? 'active' : ''}">
             <input type="checkbox" value="${b.id}" ${selected.includes(b.id) ? 'checked' : ''} style="display:none">
-            ${b.label} <span class="lpl-bm-ticker">${b.ticker}</span>
+            ${b.label} <span class="mf-bm-ticker">${b.ticker}</span>
           </label>
         `).join('')}
       </div>
 
       ${!hasPortfolioHistory ? `
-        <p class="lpl-note">No historical portfolio data captured yet. Open your LPL performance page (My Accounts → Performance) so MyFolio can capture the daily value history needed for charts.</p>
+        <p class="mf-note">No historical portfolio data captured yet. Open your brokerage's performance page (My Accounts → Performance) so MyFolio can capture the daily value history needed for charts.</p>
       ` : ''}
 
-      <p class="lpl-note">Benchmark price data is fetched from public sources (stooq.com) and cached for 24 hours. Returns are calculated from total price change and do not include dividend reinvestment. For informational purposes only — not investment advice.</p>
+      <p class="mf-note">Benchmark price data is fetched from public sources (stooq.com) and cached for 24 hours. Returns are calculated from total price change and do not include dividend reinvestment. For informational purposes only — not investment advice.</p>
     </div>
   `;
 }
@@ -1058,49 +1058,49 @@ function fmtDateShort(d) {
 
 // ── Debug tab ────────────────────────────────────────────────────────────────
 function renderDebugTab() {
-  const body = document.getElementById('lpl-body');
+  const body = document.getElementById('mf-body');
   if (!body) return;
 
   const levelIcon = { info: '●', ok: '✔', warn: '▲', err: '✖' };
 
   body.innerHTML = `
-    <div class="lpl-section lpl-debug-section">
-      <div class="lpl-debug-header">
-        <h3 class="lpl-section-title" style="margin:0">Debug Log <span class="lpl-badge">${state.logs.length}</span></h3>
-        <div class="lpl-debug-summary">
+    <div class="mf-section mf-debug-section">
+      <div class="mf-debug-header">
+        <h3 class="mf-section-title" style="margin:0">Debug Log <span class="mf-badge">${state.logs.length}</span></h3>
+        <div class="mf-debug-summary">
           <span>API calls intercepted: <strong>${state.apiCallCount}</strong></span>
           <span>Accounts: <strong>${state.accounts.length}</strong></span>
           <span>Positions: <strong>${state.positions.length}</strong></span>
           <span>Transactions: <strong>${state.transactions.length}</strong></span>
         </div>
-        <button class="lpl-reload-btn" onclick="location.reload()">↺ Reload page</button>
-        <button class="lpl-reload-btn" id="lpl-copy-log">⎘ Copy for Claude</button>
-        <button class="lpl-reload-btn" id="lpl-clear-log">✕ Clear</button>
+        <button class="mf-reload-btn" onclick="location.reload()">↺ Reload page</button>
+        <button class="mf-reload-btn" id="mf-copy-log">⎘ Copy for Claude</button>
+        <button class="mf-reload-btn" id="mf-clear-log">✕ Clear</button>
       </div>
-      <div class="lpl-debug-log" id="lpl-debug-log">
+      <div class="mf-debug-log" id="mf-debug-log">
         ${state.logs.length === 0
-          ? '<div class="lpl-debug-empty">No log entries yet. API calls will appear here as they are intercepted.</div>'
+          ? '<div class="mf-debug-empty">No log entries yet. API calls will appear here as they are intercepted.</div>'
           : state.logs.map(e => `
-            <div class="lpl-debug-entry lpl-dbg-${e.level}">
-              <span class="lpl-dbg-time">${e.t}</span>
-              <span class="lpl-dbg-icon">${levelIcon[e.level] || '●'}</span>
-              <span class="lpl-dbg-msg">${escHtml(e.msg)}</span>
-              ${e.detail ? `<pre class="lpl-dbg-detail">${escHtml(e.detail)}</pre>` : ''}
+            <div class="mf-debug-entry mf-dbg-${e.level}">
+              <span class="mf-dbg-time">${e.t}</span>
+              <span class="mf-dbg-icon">${levelIcon[e.level] || '●'}</span>
+              <span class="mf-dbg-msg">${escHtml(e.msg)}</span>
+              ${e.detail ? `<pre class="mf-dbg-detail">${escHtml(e.detail)}</pre>` : ''}
             </div>
           `).join('')}
       </div>
     </div>
   `;
 
-  document.getElementById('lpl-clear-log')?.addEventListener('click', () => {
+  document.getElementById('mf-clear-log')?.addEventListener('click', () => {
     state.logs = [];
     renderDebugTab();
   });
 
-  document.getElementById('lpl-copy-log')?.addEventListener('click', () => {
+  document.getElementById('mf-copy-log')?.addEventListener('click', () => {
     const text = buildCopyPayload();
     navigator.clipboard.writeText(text).then(() => {
-      const btn = document.getElementById('lpl-copy-log');
+      const btn = document.getElementById('mf-copy-log');
       if (btn) { btn.textContent = '✔ Copied!'; setTimeout(() => { btn.textContent = '⎘ Copy for Claude'; }, 2000); }
     });
   });
@@ -1108,7 +1108,7 @@ function renderDebugTab() {
 
 function buildCopyPayload() {
   const lines = [];
-  lines.push('=== LPL Enhanced Dashboard Debug Report ===');
+  lines.push('=== MyFolio Debug Report ===');
   lines.push(`Page URL: ${location.href}`);
   lines.push(`Time: ${new Date().toISOString()}`);
   lines.push(`API calls intercepted: ${state.apiCallCount}`);
@@ -1117,7 +1117,7 @@ function buildCopyPayload() {
   lines.push(`Transactions parsed: ${state.transactions.length}`);
   lines.push('');
   lines.push('=== All Network Requests (newest first) ===');
-  // Pull just the LPL_NET entries to show every URL seen
+  // Pull just the MF_NET entries to show every URL seen
   const netLogs = state.logs.filter(e => e.msg.includes('http') || e.msg.match(/^\W*(✔|✘)/));
   (netLogs.length ? netLogs : state.logs).forEach(e => {
     lines.push(`[${e.t}] ${e.msg}`);
@@ -1138,7 +1138,7 @@ function escHtml(s) {
 
 // ── Allocation donut chart (pure canvas, no dependencies) ───────────────────
 function renderAllocationChart() {
-  const canvas = document.getElementById('lpl-alloc-chart');
+  const canvas = document.getElementById('mf-alloc-chart');
   if (!canvas || !state.positions.length) return;
 
   const ctx = canvas.getContext('2d');
@@ -1256,20 +1256,20 @@ function activateDebugTab() {
     buildOverlay();
     setToggleLabel(true);
   }
-  const overlay = document.getElementById('lpl-overlay');
-  if (overlay) overlay.classList.remove('lpl-hidden');
-  overlay?.querySelectorAll('.lpl-tab').forEach(b => b.classList.remove('active'));
+  const overlay = document.getElementById('mf-overlay');
+  if (overlay) overlay.classList.remove('mf-hidden');
+  overlay?.querySelectorAll('.mf-tab').forEach(b => b.classList.remove('active'));
   // Ensure debug tab button exists (add it if hidden)
   let debugBtn = overlay?.querySelector('[data-tab="debug"]');
   if (!debugBtn) {
-    const nav = overlay?.querySelector('.lpl-nav');
+    const nav = overlay?.querySelector('.mf-nav');
     if (nav) {
       debugBtn = document.createElement('button');
-      debugBtn.className = 'lpl-tab lpl-tab-debug';
+      debugBtn.className = 'mf-tab mf-tab-debug';
       debugBtn.dataset.tab = 'debug';
       debugBtn.textContent = 'Debug';
       debugBtn.addEventListener('click', () => {
-        overlay.querySelectorAll('.lpl-tab').forEach(b => b.classList.remove('active'));
+        overlay.querySelectorAll('.mf-tab').forEach(b => b.classList.remove('active'));
         debugBtn.classList.add('active');
         state.activeTab = 'debug';
         renderContent();

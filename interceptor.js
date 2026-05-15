@@ -7,8 +7,8 @@
 // Captured data stays in the browser and is never transmitted to any server.
 
 (function () {
-  if (window.__lplCapture) return;
-  window.__lplCapture = true;
+  if (window.__mfCapture) return;
+  window.__mfCapture = true;
 
   // ── Fetch interception ──────────────────────────────────────────────────
   const _fetch = window.fetch.bind(window);
@@ -18,18 +18,18 @@
     try {
       response = await _fetch(...args);
     } catch (err) {
-      window.postMessage({ type: 'LPL_NET', url, status: 'fetch-error', err: String(err) }, '*');
+      window.postMessage({ type: 'MF_NET', url, status: 'fetch-error', err: String(err) }, '*');
       throw err;
     }
 
     // Always report the URL so we can see everything in debug
-    window.postMessage({ type: 'LPL_NET', url, status: response.status, ok: response.ok }, '*');
+    window.postMessage({ type: 'MF_NET', url, status: response.status, ok: response.ok }, '*');
 
     // Try to read JSON body for any call that might have account data
     if (response.ok && looksLikeData(response)) {
       const clone = response.clone();
       clone.json().then(data => {
-        window.postMessage({ type: 'LPL_API', url, data }, '*');
+        window.postMessage({ type: 'MF_API', url, data }, '*');
       }).catch(() => {});
     }
 
@@ -41,19 +41,19 @@
   const _send = XMLHttpRequest.prototype.send;
 
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this.__lplUrl = String(url);
-    this.__lplMethod = method;
+    this.__mfUrl = String(url);
+    this.__mfMethod = method;
     return _open.call(this, method, url, ...rest);
   };
 
   XMLHttpRequest.prototype.send = function (...args) {
     const xhr = this;
     xhr.addEventListener('load', function () {
-      const url = xhr.__lplUrl || '';
-      window.postMessage({ type: 'LPL_NET', url, status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300 }, '*');
+      const url = xhr.__mfUrl || '';
+      window.postMessage({ type: 'MF_NET', url, status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300 }, '*');
       try {
         const data = JSON.parse(xhr.responseText);
-        window.postMessage({ type: 'LPL_API', url, data }, '*');
+        window.postMessage({ type: 'MF_API', url, data }, '*');
       } catch (e) {}
     });
     return _send.apply(this, args);
@@ -63,11 +63,11 @@
   const _WS = window.WebSocket;
   window.WebSocket = function (url, ...rest) {
     const ws = new _WS(url, ...rest);
-    window.postMessage({ type: 'LPL_WS_OPEN', url }, '*');
+    window.postMessage({ type: 'MF_WS_OPEN', url }, '*');
     ws.addEventListener('message', (event) => {
       let data = event.data;
       try { data = JSON.parse(event.data); } catch (e) {}
-      window.postMessage({ type: 'LPL_WS_MSG', url, data }, '*');
+      window.postMessage({ type: 'MF_WS_MSG', url, data }, '*');
     });
     return ws;
   };

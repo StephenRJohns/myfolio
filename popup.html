@@ -7,14 +7,14 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 300px;
+      width: 320px;
       background: #0f172a;
       color: #e2e8f0;
       font: 14px/1.5 system-ui, sans-serif;
       padding: 20px;
     }
     h1 {
-      font-size: 16px;
+      font-size: 17px;
       font-weight: 700;
       background: linear-gradient(90deg, #818cf8, #c4b5fd);
       -webkit-background-clip: text;
@@ -22,8 +22,8 @@
       background-clip: text;
       margin-bottom: 4px;
     }
-    .tagline { font-size: 11px; color: #64748b; margin-bottom: 12px; }
-    p { font-size: 12px; color: #94a3b8; line-height: 1.7; }
+    .tagline { font-size: 11px; color: #94a3b8; margin-bottom: 14px; }
+    p { font-size: 12px; color: #cbd5e1; line-height: 1.7; }
     .steps { margin-top: 14px; list-style: none; counter-reset: steps; }
     .steps li {
       counter-increment: steps;
@@ -65,20 +65,21 @@
     }
     .disclaimer {
       margin-top: 16px;
-      padding: 10px;
+      padding: 10px 12px;
       background: #1e1b3a;
       border-left: 3px solid #6366f1;
       border-radius: 4px;
-      font-size: 10px;
-      color: #94a3b8;
-      line-height: 1.6;
+      font-size: 10.5px;
+      color: #cbd5e1;
+      line-height: 1.7;
     }
+    .disclaimer strong { color: #f1f5f9; }
     .footer {
       margin-top: 14px;
       padding-top: 12px;
       border-top: 1px solid #1e293b;
       font-size: 10px;
-      color: #475569;
+      color: #64748b;
       display: flex;
       justify-content: space-between;
     }
@@ -87,19 +88,22 @@
 </head>
 <body>
   <h1>◆ MyFolio</h1>
-  <div class="tagline">A cleaner view for your retirement account</div>
+  <div class="tagline">A cleaner view of your retirement account</div>
+
+  <p>A personal-use tool built by an individual developer who wanted a clearer view of their own retirement account. Shared freely in case others find it useful.</p>
 
   <ol class="steps">
-    <li>Log in to accountview.lpl.com normally</li>
-    <li>Click <strong>◆ MyFolio View</strong> at the bottom-right of the page</li>
-    <li>Browse Overview, Holdings, Activity tabs in your LPL account so MyFolio can capture the data</li>
+    <li>Log in to your retirement account at <code>accountview.lpl.com</code></li>
+    <li>Click <strong>◆ MyFolio View</strong> at the bottom-right</li>
+    <li>Browse your account's Overview, Holdings, and Activity pages so MyFolio can read the data</li>
     <li>Your modern dashboard updates automatically</li>
   </ol>
 
-  <button class="btn" id="open-btn">Open AccountView</button>
+  <button class="btn" id="open-btn">Open your account</button>
 
   <div class="disclaimer">
-    <strong>Unofficial.</strong> MyFolio is not affiliated with, endorsed by, or sponsored by LPL Financial LLC. All data stays in your browser — nothing is transmitted to any server.
+    <strong>Personal tool — not affiliated with any brokerage.</strong>
+    JJJJJ Enterprises, LLC has no business relationship of any kind with the brokerage firm whose website this tool is compatible with. MyFolio collects no data, transmits nothing to any server, and is not investment advice. Verify all figures against your official statements.
   </div>
 
   <div class="footer">

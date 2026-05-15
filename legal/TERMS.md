@@ -8,32 +8,39 @@ By installing or using the Service you ("you", "your") agree to these Terms of S
 
 ---
 
-## 1. Description of the Service
+## 1. About the Service
 
-MyFolio is a Chrome browser extension that runs inside your Chrome browser. While you are logged in to LPL Financial LLC's AccountView website (`accountview.lpl.com`), the Service reads data from API responses that your browser already receives and presents that data in a modern visual layout (the "Dashboard"). The Service can also fetch public ETF price history from stooq.com to render benchmark comparison charts on the Dashboard's Performance tab.
+MyFolio is a Chrome browser extension that was built by an individual developer for their own personal use to view their own retirement account in a cleaner visual layout. The developer shared it freely in case others might find it useful. **It is a personal-use tool, not a commercial product.**
 
-The Service runs entirely inside your browser. We operate no backend that stores or processes your data. See the [Privacy Policy](PRIVACY.md) for details.
+The Service runs entirely inside your Chrome browser. We operate no backend that stores or processes your data. See the [Privacy Policy](PRIVACY.md) for an itemized list of what the Service does and does not access.
 
-### 1.1 Free of Charge
+### 1.1 Free of Charge, As-Is
 
-The Service is provided free of charge. We do not currently offer paid features or subscriptions. If we introduce paid features in the future, those features will be optional and clearly marked.
+The Service is provided **free of charge**, **as-is**, and **as-available**, with no warranties, no commitments, no guarantees, and no obligation on our part to maintain, fix, update, support, or continue distributing it. We do not currently offer, and have no plans to offer, paid features or subscriptions.
+
+### 1.2 No Affiliation With LPL Financial LLC
+
+**JJJJJ Enterprises, LLC has no affiliation, partnership, agreement, sponsorship, employment, contractual relationship, or any other business connection of any kind with LPL Financial LLC**, its parent companies, its subsidiaries, its affiliates, its registered representatives, or its employees. See [DISCLAIMER.md § 1](DISCLAIMER.md) for the full no-affiliation statement.
+
+"LPL", "LPL Financial", and "AccountView" are trademarks of LPL Financial LLC, referenced solely for nominative fair use (compatibility identification). LPL Financial LLC has not reviewed, approved, endorsed, certified, or sponsored MyFolio in any way.
 
 ## 2. Eligibility and Intended Use
 
-The Service is intended for **personal use** by an individual managing their own LPL AccountView retirement or brokerage account.
+The Service is intended for **personal use** by an individual viewing their own retirement or brokerage account.
 
 By installing or using the Service you represent that:
 
 - you are at least 18 years old and capable of forming a binding contract;
 - you are located in the United States;
-- you are accessing only your own LPL account, with your own valid credentials, in accordance with your agreement with LPL Financial LLC;
-- you will not use the Service in any manner that violates LPL Financial LLC's terms of service or any other applicable law or agreement.
+- you are accessing only your own account, with your own valid credentials, in accordance with your agreement with your brokerage;
+- you understand that your relationship with your brokerage is governed by your agreement with them, and that your use of any browser extension on the brokerage's website is your responsibility;
+- you accept that the Service is provided as-is, with no warranty, no support, and no guarantee of accuracy.
 
-## 3. Relationship to LPL Financial LLC
+## 3. Your Relationship With Your Brokerage Is Your Own
 
-**MyFolio is an independent, unofficial extension.** JJJJJ Enterprises, LLC is not affiliated with, sponsored by, or endorsed by LPL Financial LLC. "LPL", "LPL Financial", and "AccountView" are trademarks of LPL Financial LLC, used here solely for nominative fair use (to identify the website the Service is compatible with).
+Your account is held by, your money is managed by, and your relationship is with your brokerage — **not us**. We have no visibility into your account, no ability to act on it, and no influence over your brokerage's terms of service. **You are solely responsible** for ensuring that your use of any browser extension (including this one) on your brokerage's website does not violate the brokerage's own terms. We make no representation that any particular brokerage permits browser extensions on its website. If you are uncertain, do not use the Service.
 
-**Your relationship with LPL is your own.** Your use of the LPL website is governed by LPL's terms of service, which exist independently of these Terms. The Service does nothing on LPL's servers, does not authenticate against LPL, and does not bypass any of LPL's access controls — it simply reads data that LPL's website has already delivered to your browser. Nevertheless, **you are solely responsible** for ensuring that your use of any browser extension (including this one) on the LPL website does not violate LPL's own terms. We make no representation that LPL permits the use of browser extensions on its website.
+If your brokerage notifies us that it objects to the Service, or if its terms of service appear to prohibit such tools, we will discontinue distribution of the Service.
 
 ## 4. Acceptable Use
 
@@ -41,50 +48,60 @@ You agree NOT to use the Service to:
 
 - access any account that is not your own, or to which you do not have an explicit right of access;
 - redistribute, sublicense, resell, modify, reverse-engineer, or create derivative works of the Service (see [LICENSE](../LICENSE));
-- circumvent any security control, rate limit, or terms imposed by LPL Financial LLC or by Stooq sp. z o.o.;
+- circumvent any security control, rate limit, or terms imposed by any third party;
 - use the Service in any manner that violates applicable law, including U.S. securities laws, privacy laws, or computer-misuse laws;
-- use the Service to scrape, archive, or extract data from LPL beyond what is necessary for personal viewing of your own account.
+- use the Service to scrape, archive, or extract data from any brokerage beyond the personal viewing of your own account.
 
 We reserve the right to ask you to stop using the Service if we reasonably believe you are violating these Terms.
 
 ## 5. Third-Party Services
 
-The Service interacts with:
+The Service may interact with:
 
-- **LPL AccountView** (`accountview.lpl.com`) — you authenticate with LPL directly; the Service reads data your browser already receives.
+- Your **brokerage's website** — you authenticate with the brokerage directly; the Service reads JSON responses your browser already receives.
 - **Stooq** (`stooq.com`) — public stock-data provider used for benchmark comparisons.
 
-Your use of those services is governed by their own terms. We do not control them and are not responsible for their availability, accuracy, or terms.
+Your use of those services is governed by their own terms. We do not control them, do not endorse them, and are not responsible for their availability, accuracy, or terms.
 
-## 6. No Investment Advice
+## 6. No Investment Advice, No Suitability, No Reliance
 
-**The Service is a data visualization tool. It is not investment advice, tax advice, or financial planning advice.** Any figures, charts, comparisons, or returns shown in the Service are presented for informational purposes only and may contain errors, delays, or inaccuracies. **Do not make investment decisions based solely on data presented by the Service.** Consult a licensed financial professional, your account statements, and authoritative data sources before making any financial decision.
+**The Service is a data visualization tool. It is not investment advice, tax advice, retirement planning advice, or financial planning advice.** Any figure, chart, comparison, return, percentage, or summary shown in the Service may contain errors, may be delayed, may be incomplete, or may reflect a misunderstanding of the brokerage's data format.
 
-The benchmark price history shown is fetched from a public third-party source (stooq.com) and may be delayed, incomplete, or subject to data errors outside our control. Past performance is not indicative of future results.
+**Do not make any financial decision based solely on data presented by the Service.** Always:
+
+- verify every figure against your official brokerage statement;
+- consult a licensed financial professional before acting;
+- treat MyFolio output as informational only.
+
+We make no representation that the Service is suitable for your particular financial situation, account type, holdings, tax bracket, retirement plan, or any other circumstance. Past performance, of your portfolio or of any benchmark, is not indicative of future results.
 
 ## 7. Accuracy and Data Errors
 
-The Service parses API responses from LPL based on field-name patterns observed at the time the Service was authored. If LPL changes its API structure or field names, the Service may display incorrect or missing data, or may fail to display data entirely. We do not guarantee the Service will continue to function correctly after any change to LPL's website. **Always verify any figure in the Service against the official LPL statement before acting on it.**
+The Service parses brokerage API responses based on field-name patterns observed at the time the Service was authored. If the brokerage changes its API structure, the Service may display incorrect, stale, or missing data, possibly without any indication that something is wrong. **Always verify any figure in the Service against the official statement issued by your brokerage before acting on it.**
+
+Benchmark price history is fetched from a public third-party source (stooq.com), may be delayed or contain errors, and does not include dividend reinvestment. Benchmark figures are for **rough visual comparison only**.
 
 ## 8. No Warranty
 
-THE SERVICE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, AVAILABILITY, AND NONINFRINGEMENT. JJJJJ ENTERPRISES, LLC DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF HARMFUL COMPONENTS.
+THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, COMPLETENESS, AVAILABILITY, SUITABILITY, RELIABILITY, OR NONINFRINGEMENT. JJJJJ ENTERPRISES, LLC AND THE INDIVIDUAL DEVELOPER DO NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, ACCURATE, OR FREE OF HARMFUL COMPONENTS.
+
+See [DISCLAIMER.md § 3](DISCLAIMER.md) for an itemized list of disclaimed warranties.
 
 ## 9. Limitation of Liability
 
-TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL JJJJJ ENTERPRISES, LLC OR ITS AFFILIATES, OFFICERS, EMPLOYEES, OR AGENTS BE LIABLE TO YOU FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES — INCLUDING LOST PROFITS, LOST DATA, LOST GOODWILL, OR INVESTMENT LOSSES — ARISING OUT OF OR IN CONNECTION WITH THESE TERMS OR YOUR USE OF (OR INABILITY TO USE) THE SERVICE, WHETHER UNDER CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR ANY OTHER LEGAL THEORY, EVEN IF JJJJJ ENTERPRISES, LLC HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL JJJJJ ENTERPRISES, LLC OR ITS AFFILIATES, OFFICERS, EMPLOYEES, AGENTS, OR THE INDIVIDUAL DEVELOPER BE LIABLE TO YOU FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES — INCLUDING LOST PROFITS, LOST INVESTMENT GAINS, MISTIMED TRADES, TAX PENALTIES, WITHDRAWAL ERRORS, BENEFICIARY ERRORS, ESTATE ERRORS, LOST DATA, LOST GOODWILL, OR THIRD-PARTY CLAIMS — ARISING OUT OF OR IN CONNECTION WITH THESE TERMS OR YOUR USE OF (OR INABILITY TO USE) THE SERVICE, WHETHER UNDER CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, STATUTE, OR ANY OTHER LEGAL THEORY, EVEN IF JJJJJ ENTERPRISES, LLC OR THE INDIVIDUAL DEVELOPER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
 
-OUR AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE SERVICE, WHATEVER THE CAUSE, IS LIMITED TO ONE HUNDRED U.S. DOLLARS ($100). BECAUSE THE SERVICE IS PROVIDED FREE OF CHARGE, THIS LIMITATION REFLECTS THE BARGAIN BETWEEN THE PARTIES.
+BECAUSE THE SERVICE IS PROVIDED FREE OF CHARGE, OUR MAXIMUM AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE SERVICE IS CAPPED AT **ZERO DOLLARS ($0.00)**. THIS LIMITATION REFLECTS THE BARGAIN: A FREE TOOL WITH NO LIABILITY.
 
-SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OR LIMITATION OF CERTAIN DAMAGES, SO PORTIONS OF THIS SECTION MAY NOT APPLY TO YOU.
+Some jurisdictions do not allow the exclusion or limitation of certain damages. In those jurisdictions, the foregoing applies to the maximum extent permitted by law.
 
 ## 10. Indemnification
 
-You agree to indemnify, defend, and hold harmless JJJJJ Enterprises, LLC and its affiliates, officers, employees, and agents from any claim, demand, loss, liability, cost, or expense (including reasonable attorneys' fees) arising out of or relating to: (a) your use of the Service; (b) your violation of these Terms; (c) your violation of LPL's terms of service or any other third-party agreement; (d) your violation of any applicable law; or (e) any decision you make based on data presented by the Service.
+You agree to indemnify, defend, and hold harmless JJJJJ Enterprises, LLC, its affiliates, officers, employees, agents, and the individual developer from any claim, demand, loss, liability, cost, or expense (including reasonable attorneys' fees) arising out of or relating to: (a) your use of the Service; (b) your violation of these Terms; (c) your violation of your brokerage's terms of service or any other third-party agreement; (d) your violation of any applicable law; or (e) any decision you make based on data presented by the Service.
 
 ## 11. Termination
 
-You may stop using the Service at any time by uninstalling the extension from Chrome. We may terminate or modify your right to use the Service at any time, for any reason or no reason, with or without notice. Sections 6 (No Investment Advice), 8 (No Warranty), 9 (Limitation of Liability), 10 (Indemnification), and 14 (Governing Law) survive termination.
+You may stop using the Service at any time by uninstalling the extension from Chrome. We may discontinue the Service at any time, for any reason or no reason, with or without notice. Sections 6 (No Investment Advice), 8 (No Warranty), 9 (Limitation of Liability), 10 (Indemnification), and 14 (Governing Law) survive termination.
 
 ## 12. Modifications to These Terms
 
