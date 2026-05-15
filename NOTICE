@@ -1,0 +1,36 @@
+MyFolio — Additional Notices
+============================
+
+These notices accompany the MIT License (see LICENSE) but are not part of the
+MIT grant itself. They describe context that applies to the official MyFolio
+distribution by JJJJJ Enterprises, LLC and to fair-use references to
+third-party trademarks.
+
+1. No affiliation with LPL Financial LLC
+
+   This software is not affiliated with, endorsed by, sponsored by, or in any
+   way connected to LPL Financial LLC or any other brokerage. "LPL", "LPL
+   Financial", and "AccountView" are trademarks of LPL Financial LLC,
+   referenced solely under nominative fair use to identify the website with
+   which this software is technically compatible.
+
+2. Third-party Terms of Service
+
+   Use of this software with any third-party brokerage website is subject to
+   that brokerage's Terms of Service. You are responsible for ensuring that
+   your use of this software complies with any agreements that bind you.
+
+3. Not investment advice
+
+   This software is a data-visualization tool. It is not investment advice.
+   See legal/DISCLAIMER.md, legal/TERMS.md, and legal/PRIVACY.md for the full
+   context that applies to the official distribution by JJJJJ Enterprises,
+   LLC. Forks that materially change behavior should publish their own.
+
+4. Forks and derivative works
+
+   The MIT License explicitly permits forking, modification, and
+   redistribution. The TERMS, PRIVACY, and DISCLAIMER documents in this
+   repository describe obligations between users and JJJJJ Enterprises, LLC
+   that arise from use of the official distribution; they do not bind
+   downstream forks, which are free to adopt their own user-facing terms.

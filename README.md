@@ -71,6 +71,7 @@ MyFolio currently parses the LPL AccountView (`accountview.lpl.com`) JSON API. I
 ## Legal
 
 - **[LICENSE](LICENSE)** — MIT License. Use, copy, modify, fork, and redistribute freely. No warranty.
+- **[NOTICE](NOTICE)** — Additional context: no-affiliation, trademark fair-use, third-party Terms of Service, fork obligations.
 - **[legal/TERMS.md](legal/TERMS.md)** — Terms covering the official distribution by JJJJJ Enterprises, LLC (free, as-is, liability disclaimed).
 - **[legal/PRIVACY.md](legal/PRIVACY.md)** — Privacy Policy (itemized list of what is not collected).
 - **[legal/DISCLAIMER.md](legal/DISCLAIMER.md)** — Disclaimer (no affiliation, no warranty, no suitability, no investment advice).
