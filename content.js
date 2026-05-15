@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.4.7';
+const MF_VERSION = 'v1.4.8';
 
 const state = {
   accounts: [],
@@ -465,6 +465,9 @@ function parseApiResponse(url, data) {
         }
       }
       state.accountDailyValues = perAcct;
+      // Remember which account ids had REAL native series from LPL — synthesis
+      // will preserve these and re-do only the others on subsequent runs.
+      state.lplProvidedAccountIds = new Set(Object.keys(perAcct));
       backfillAccountValues();
 
       const sorted = Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
@@ -580,18 +583,22 @@ function backfillAccountValues() {
 // the banner can disclose this honestly.
 function synthesizeMissingAccountDailies() {
   if (!state.dailyValues.length || !state.accounts.length) return;
+
+  // First, evict any previously-synthesized per-account series. These would
+  // otherwise cause the function to short-circuit on re-runs (e.g. after
+  // activity-history arrives with new cash flows that would change the
+  // synthesis). The "natural" series from account-vot are protected via
+  // state.lplProvidedAccountIds.
+  state.lplProvidedAccountIds = state.lplProvidedAccountIds || new Set();
+  for (const id of Object.keys(state.accountDailyValues || {})) {
+    if (!state.lplProvidedAccountIds.has(id)) {
+      delete state.accountDailyValues[id];
+    }
+  }
+
   const dates = state.dailyValues.map(d => d.date);
   let reconstructed = 0;
   state.flatLinedAccounts = [];
-  const addToAggregate = (dailySeries) => {
-    const aggMap = new Map(state.dailyValues.map(d => [d.date, d.value]));
-    for (const d of dailySeries) {
-      aggMap.set(d.date, (aggMap.get(d.date) || 0) + d.value);
-    }
-    state.dailyValues = Array.from(aggMap.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, value]) => ({ date, value }));
-  };
 
   for (const acct of state.accounts) {
     if (acct.id === 'portfolio') continue;
@@ -621,7 +628,6 @@ function synthesizeMissingAccountDailies() {
     }
     if (synth.length >= 2) {
       state.accountDailyValues[acct.id] = synth;
-      addToAggregate(synth);
       if (cfList.length > 0) {
         reconstructed++;
         dbg('ok', `Reconstructed ${synth.length} daily values for ${acct.name} from ${cfList.length} cash flows`, { current: acct.value });
@@ -631,8 +637,22 @@ function synthesizeMissingAccountDailies() {
       }
     }
   }
+
+  // Rebuild state.dailyValues from scratch by summing ALL per-account series
+  // (LPL-provided + freshly synthesized). This avoids stale carry-over from
+  // a previous run that wrote synthesized values onto state.dailyValues.
+  const aggMap = new Map();
+  for (const id of Object.keys(state.accountDailyValues)) {
+    for (const d of state.accountDailyValues[id] || []) {
+      aggMap.set(d.date, (aggMap.get(d.date) || 0) + d.value);
+    }
+  }
+  state.dailyValues = Array.from(aggMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, value]) => ({ date, value }));
+
   if (reconstructed || state.flatLinedAccounts.length) {
-    dbg('ok', `Aggregate rebuilt: ${reconstructed} reconstructed, ${state.flatLinedAccounts.length} flat-lined`);
+    dbg('ok', `Aggregate rebuilt: ${reconstructed} reconstructed, ${state.flatLinedAccounts.length} flat-lined, ${state.dailyValues.length} aggregated dates`);
   }
 }
 
@@ -1975,25 +1995,29 @@ async function loadBenchmarkSeries(ticker) {
 
     // Proxy through the service worker — MV3 content scripts use the host
     // page's origin and Stooq doesn't allow CORS for accountview.lpl.com.
+    // Use a connect port (not sendMessage) so the worker stays alive while
+    // the fetch is in flight.
     if (!extensionContextValid()) throw new Error('Extension not loaded');
     dbg('info', `Stooq: requesting ${ticker} via service worker`, { url });
     const resp = await new Promise((resolve) => {
       let settled = false;
-      const done = (r) => { if (!settled) { settled = true; resolve(r); } };
-      // Watchdog — if the service worker never responds (it died, isn't
-      // registered, etc.) at least fail visibly instead of hanging forever.
-      const watchdog = setTimeout(() => done({ ok: false, error: 'No response from service worker within 15s (worker may be sleeping or not registered)' }), 15000);
+      const id = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+      const done = (r) => { if (!settled) { settled = true; resolve(r); try { port && port.disconnect(); } catch (e) {} } };
+      const watchdog = setTimeout(() => done({ ok: false, error: 'No response from service worker within 25s' }), 25000);
+      let port;
       try {
-        chrome.runtime.sendMessage({ type: 'MF_FETCH_TEXT', url }, (r) => {
-          clearTimeout(watchdog);
-          const lastErr = (() => { try { return chrome.runtime?.lastError; } catch (e) { return null; } })();
-          if (lastErr) { done({ ok: false, error: `sendMessage: ${lastErr.message || String(lastErr)}` }); return; }
-          if (!r) { done({ ok: false, error: 'Service worker returned undefined response' }); return; }
-          done(r);
+        port = chrome.runtime.connect({ name: 'mf-fetch' });
+        port.onMessage.addListener((m) => {
+          if (m && m.id === id) { clearTimeout(watchdog); done(m); }
         });
+        port.onDisconnect.addListener(() => {
+          const lastErr = (() => { try { return chrome.runtime?.lastError; } catch (e) { return null; } })();
+          if (!settled) { clearTimeout(watchdog); done({ ok: false, error: `port disconnected${lastErr ? `: ${lastErr.message || lastErr}` : ''}` }); }
+        });
+        port.postMessage({ id, type: 'fetch', url });
       } catch (e) {
         clearTimeout(watchdog);
-        done({ ok: false, error: String(e.message || e) });
+        done({ ok: false, error: `connect failed: ${e.message || e}` });
       }
     });
     if (!resp.ok) throw new Error(resp.error || 'fetch failed');
