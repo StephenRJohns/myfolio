@@ -156,6 +156,46 @@ safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'c
   }
 });
 
+// If this tab was opened by MyFolio to capture activity data (via the
+// "Load Activity Data" button), close it automatically once the data lands.
+(function installAutoClose() {
+  try {
+    const param = new URLSearchParams(window.location.search).get('mf_auto');
+    if (param !== 'activity') return;
+    const onChanged = (changes, area) => {
+      if (area !== 'local' || !changes.cachedTransactions) return;
+      try { chrome.storage.onChanged.removeListener(onChanged); } catch (e) {}
+      setTimeout(() => { try { window.close(); } catch (e) {} }, 600);
+    };
+    if (chrome?.storage?.onChanged) chrome.storage.onChanged.addListener(onChanged);
+  } catch (e) {}
+})();
+
+// Listen for transaction data captured in another tab (e.g. the activity page
+// opened via the "Load Activity Data" button). Merges new rows, re-synthesizes,
+// and refreshes the UI without requiring a page reload.
+(function installCrossTabListener() {
+  try {
+    if (!chrome?.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes.cachedTransactions) return;
+      const incoming = changes.cachedTransactions.newValue;
+      if (!incoming || !Array.isArray(incoming.data)) return;
+      const key = (t) => `${t.accountId}|${t.date}|${String(t.amount ?? 0)}|${t.symbol}`;
+      const existing = new Map(state.transactions.map(t => [key(t), t]));
+      let added = 0;
+      for (const t of incoming.data) {
+        if (!existing.has(key(t))) { existing.set(key(t), t); added++; }
+      }
+      if (added === 0) return;
+      state.transactions = Array.from(existing.values());
+      dbg('ok', `Cross-tab update: +${added} transactions from activity page`);
+      if (state.dailyValues.length >= 2) synthesizeMissingAccountDailies();
+      refreshOverlay();
+    });
+  } catch (e) {}
+})();
+
 // Proactively re-fetch the value-over-time data using saved request details.
 // This replays the same request the browser already made, using the browser's
 // own session cookie. The request is identical to one the page initiated.
@@ -960,6 +1000,7 @@ function buildOverlay() {
         <button class="mf-tab active" data-tab="overview">Overview</button>
         <button class="mf-tab" data-tab="holdings">Holdings</button>
         <button class="mf-tab" data-tab="transactions">Transactions</button>
+        <button class="mf-tab" data-tab="activity">Activity</button>
         <button class="mf-tab" data-tab="performance">Performance</button>
       </nav>
       <button class="mf-help-btn" id="mf-help-btn" title="Help for this tab">?</button>
@@ -1050,6 +1091,12 @@ function buildOverlay() {
       // close it — the inputs themselves need to be interactive.
       if (e.target.closest('#mf-chart-custom-popover')) {
         e.stopPropagation();
+        return;
+      }
+
+      // Activity tab — load/refresh buttons
+      if (e.target.closest('#mf-load-activity-btn') || e.target.closest('#mf-reload-activity-btn') || e.target.closest('#mf-flatline-activity-btn')) {
+        openActivityPage();
         return;
       }
 
@@ -1630,6 +1677,29 @@ const HELP_CONTENT = {
       </ul>
     `,
   },
+  activity: {
+    title: 'Activity tab',
+    body: `
+      <p>External cash flows only — deposits, withdrawals, rollovers, beneficiary transfers, and journal entries. Buys, sells, and dividends are in the Transactions tab.</p>
+      <h4>Summary bar</h4>
+      <ul>
+        <li><strong>Total Deposited</strong> — sum of all inflows (deposits, rollovers, CDW transfers, journal credits).</li>
+        <li><strong>Total Withdrawn</strong> — sum of all outflows (withdrawals, distributions, journal debits).</li>
+        <li><strong>Net Contributions</strong> — Deposited minus Withdrawn. This is the total external money you have added to the portfolio over the captured history.</li>
+        <li>Use the <strong>↺ Refresh</strong> button to open the LPL Activity page and capture any new cash flows. The tab closes automatically once data is saved.</li>
+      </ul>
+      <h4>Loading data</h4>
+      <ul>
+        <li>MyFolio captures cash-flow data automatically when you visit the Activity page on LPL AccountView. Once captured, it is stored locally and available on every future load.</li>
+        <li>If the activity list is empty, click <strong>Load Activity Data</strong>. A new tab opens at the LPL Activity page, MyFolio captures the data in the background, and the tab closes itself — you don't need to do anything else. The chart on the Overview tab will update immediately.</li>
+      </ul>
+      <h4>Why this matters for charts</h4>
+      <ul>
+        <li>When an account has no daily-value history from the brokerage (e.g. a beneficiary transfer or rollover account), MyFolio reconstructs it from your activity — working backwards from today's balance. Without activity data the chart falls back to a flat line at today's value, which is why the Overview chart warned you about those accounts.</li>
+        <li>Amounts for in-kind share transfers (e.g. CDW — beneficiary shares) are estimated using the current share price, since the brokerage reports quantity but not a cash amount for those rows.</li>
+      </ul>
+    `,
+  },
   debug: {
     title: 'Debug tab',
     body: `
@@ -1748,6 +1818,7 @@ function renderContent() {
   }
   if (tab === 'holdings') { body.innerHTML = renderHoldings(); renderAllocationChart(); return; }
   if (tab === 'transactions') { body.innerHTML = renderTransactions(); return; }
+  if (tab === 'activity') { body.innerHTML = renderActivity(); return; }
   if (tab === 'performance') { body.innerHTML = renderPerformance(); initPerformanceCharts(); return; }
   if (tab === 'debug') renderDebugTab();
 }
@@ -1811,7 +1882,7 @@ function renderOverview() {
   let chartGapMsg = '';
   if (hasDailyData && !selectedAcct && Array.isArray(state.flatLinedAccounts) && state.flatLinedAccounts.length) {
     const names = state.flatLinedAccounts.map(a => `${a.name} (${fmt$(a.value)})`).join(', ');
-    chartGapMsg = `Chart includes ${names} as a flat line at today's value — the brokerage did not deliver daily history for ${state.flatLinedAccounts.length > 1 ? 'these accounts' : 'this account'} and we have no cash-flow transactions to reconstruct the timing. Click your brokerage's Activity page (or Transactions / History) to capture deposit dates so the curve can be redrawn correctly.`;
+    chartGapMsg = `Chart includes ${escHtml(names)} as a flat line at today's value — deposit history not yet captured. <button class="mf-btn-inline" id="mf-flatline-activity-btn">Load Activity Data</button> to fix this automatically.`;
   }
 
   return `
@@ -1875,7 +1946,7 @@ function renderOverview() {
           ` : ''}
           <canvas id="mf-overview-chart" style="width:100%;display:block;height:220px"></canvas>
           ${!hasDailyData ? `<p class="mf-note" style="margin-top:8px">Waiting for daily value history — it loads automatically once your brokerage's Overview page has been open. If this persists after 10 seconds, try scrolling down to trigger the brokerage's chart section.</p>` : ''}
-          ${chartGapMsg ? `<p class="mf-note mf-note-warn" style="margin-top:8px">${escHtml(chartGapMsg)}</p>` : ''}
+          ${chartGapMsg ? `<p class="mf-note mf-note-warn" style="margin-top:8px">${chartGapMsg}</p>` : ''}
         </div>
       </div>
 
@@ -2310,6 +2381,113 @@ function periodReturns(series) {
   };
   const pct = (s) => s ? ((latest.close - s.close) / s.close) * 100 : null;
   return { ytd: pct(startBars.ytd), oneY: pct(startBars.oneY), threeY: pct(startBars.threeY), fiveY: pct(startBars.fiveY) };
+}
+
+function openActivityPage() {
+  try {
+    window.open('https://accountview.lpl.com/web/activity?mf_auto=activity', '_blank', 'noopener');
+  } catch (e) {
+    dbg('warn', 'Could not open activity page', { err: String(e) });
+  }
+}
+
+function renderActivity() {
+  const acct = getSelectedAccount();
+  const allCashFlows = (acct
+    ? state.transactions.filter(t => t.accountId === acct.id)
+    : state.transactions
+  ).filter(isCashFlow).sort((a, b) => {
+    const da = parseDateLoose(a.date), db = parseDateLoose(b.date);
+    return (db || 0) - (da || 0);
+  });
+
+  const hasHistory = state.transactions.some(t => isCashFlow(t));
+  const hasActivityCache = allCashFlows.length > 0;
+
+  // Summary totals
+  let totalIn = 0, totalOut = 0;
+  for (const t of allCashFlows) {
+    const v = cashFlowImpact(t);
+    if (v > 0) totalIn += v; else totalOut += Math.abs(v);
+  }
+  const netContrib = totalIn - totalOut;
+
+  // Group by month for display
+  const byMonth = {};
+  for (const t of allCashFlows) {
+    const d = parseDateLoose(t.date);
+    const key = d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` : 'unknown';
+    if (!byMonth[key]) byMonth[key] = [];
+    byMonth[key].push(t);
+  }
+  const monthKeys = Object.keys(byMonth).sort((a, b) => b.localeCompare(a));
+
+  const noDataBanner = !hasHistory ? `
+    <div class="mf-activity-empty">
+      <p>No activity history captured yet. MyFolio records deposits, withdrawals, and transfers automatically when you visit the Activity page on LPL AccountView.</p>
+      <button class="mf-btn-primary" id="mf-load-activity-btn">Load Activity Data</button>
+      <p class="mf-note" style="margin-top:8px">Clicking this button opens the LPL Activity page in a new tab. MyFolio captures the data there and closes the tab automatically — you don't need to do anything else.</p>
+    </div>` : '';
+
+  const summaryBar = hasHistory ? `
+    <div class="mf-activity-summary">
+      <div class="mf-activity-stat">
+        <div class="mf-activity-stat-label">Total Deposited</div>
+        <div class="mf-activity-stat-value pos">${fmt$(totalIn)}</div>
+      </div>
+      <div class="mf-activity-stat">
+        <div class="mf-activity-stat-label">Total Withdrawn</div>
+        <div class="mf-activity-stat-value neg">${fmt$(totalOut)}</div>
+      </div>
+      <div class="mf-activity-stat">
+        <div class="mf-activity-stat-label">Net Contributions</div>
+        <div class="mf-activity-stat-value ${netContrib >= 0 ? 'pos' : 'neg'}">${fmt$(netContrib)}</div>
+      </div>
+      <div style="margin-left:auto">
+        <button class="mf-btn-secondary" id="mf-reload-activity-btn" title="Refresh activity data from LPL">↺ Refresh</button>
+      </div>
+    </div>` : '';
+
+  const rowsHtml = monthKeys.map(mk => {
+    const label = (() => {
+      const [y, m] = mk.split('-');
+      if (mk === 'unknown') return 'Unknown Date';
+      return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    })();
+    const rows = byMonth[mk].map(t => {
+      const v = cashFlowImpact(t);
+      const sign = v >= 0 ? 'pos' : 'neg';
+      const typeCode = (t.type || '').toUpperCase();
+      const desc = t.description || typeCode || '—';
+      const acctName = !acct ? (() => {
+        const a = state.accounts.find(x => x.id === t.accountId);
+        return a ? `<span class="mf-txn-acct">${escHtml(a.name)}</span>` : '';
+      })() : '';
+      return `<tr>
+        <td>${fmtDateShort(t.date)}</td>
+        <td><span class="mf-badge mf-badge-cf">${escHtml(typeCode)}</span></td>
+        <td>${escHtml(desc)}${acctName}</td>
+        <td class="${sign}" style="text-align:right">${v >= 0 ? '+' : ''}${fmt$(v)}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="mf-activity-month">
+        <div class="mf-activity-month-hdr">${escHtml(label)}</div>
+        <table class="mf-table" style="width:100%">
+          <thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Amount</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="mf-section">
+      ${renderBreadcrumb()}
+      ${summaryBar}
+      ${noDataBanner}
+      ${hasHistory && allCashFlows.length === 0 ? '<p class="mf-note">No cash-flow transactions for this filter.</p>' : ''}
+      ${rowsHtml}
+    </div>`;
 }
 
 function renderPerformance() {

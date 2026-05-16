@@ -900,3 +900,72 @@
 .mf-dbg-err .mf-dbg-icon { color: #f87171; }
 .mf-dbg-err .mf-dbg-msg  { color: #fca5a5; }
 .mf-dbg-err               { background: #150505; }
+
+/* ── Activity tab ─────────────────────────────────────────────────────────── */
+.mf-activity-summary {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.mf-activity-stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+.mf-activity-stat-value { font-size: 18px; font-weight: 700; }
+.mf-activity-month { margin-bottom: 20px; }
+.mf-activity-month-hdr {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #334155;
+}
+.mf-activity-empty {
+  background: #1e293b;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+  color: #94a3b8;
+}
+.mf-activity-empty p { margin: 0 0 14px; }
+.mf-badge-cf { background: #1d4ed8; color: #bfdbfe; }
+.mf-txn-acct { font-size: 11px; color: #64748b; margin-left: 6px; }
+
+/* ── Shared buttons ───────────────────────────────────────────────────────── */
+.mf-btn-primary {
+  background: linear-gradient(135deg,#6366f1,#8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font: 600 13px/1 system-ui,sans-serif;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.mf-btn-primary:hover { opacity: 0.85; }
+.mf-btn-secondary {
+  background: #334155;
+  color: #cbd5e1;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: 600 12px/1 system-ui,sans-serif;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mf-btn-secondary:hover { background: #3f5068; }
+.mf-btn-inline {
+  background: none;
+  border: none;
+  color: #818cf8;
+  font: 600 12px/1 system-ui,sans-serif;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}

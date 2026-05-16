@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.0] — 2026-05-16
+
+### Added
+- **Activity tab** — dedicated view for external cash flows (deposits, withdrawals, rollovers, CDW/beneficiary transfers, journal entries). Shows Total Deposited, Total Withdrawn, and Net Contributions in a summary bar; transactions grouped by calendar month.
+- **One-click activity data loading** — "Load Activity Data" button (on the Activity tab and in the Overview chart flat-line warning) opens `accountview.lpl.com/web/activity?mf_auto=activity` in a new tab. The extension captures the data there, saves it, and the tab closes automatically. No manual navigation required.
+- **Cross-tab live update** — `chrome.storage.onChanged` listener merges transactions captured in other tabs into the running state, re-synthesizes missing account history, and refreshes the chart without a page reload.
+- **Inline flat-line warning button** — the Overview chart warning for flat-lined accounts now includes a clickable "Load Activity Data" link instead of instructing the user to navigate manually.
+- Help text for the new Activity tab explaining data loading, the summary bar, and how activity data feeds the chart reconstruction.
+
+### Changed
+- Flat-line chart message is now HTML (button embedded) and no longer escaped on render.
+
+---
+
 ## [1.5.1] — 2026-05-15
 
 ### Fixed

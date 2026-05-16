@@ -10,7 +10,7 @@ A **Chrome extension (Manifest V3)** called **MyFolio** that overlays a clean, m
 
 **Publisher:** JJJJJ Enterprises, LLC
 **License:** MIT
-**Current version:** 1.5.1
+**Current version:** 1.6.0
 **Language:** Vanilla JavaScript (ES2020+), no build step, no npm, no bundler, no external libraries
 
 ---
@@ -76,7 +76,7 @@ const state = {
   selectedAccountId: null,    // null = all; string = drill-in
   selectedAssetClass: null,
   selectedSymbol: null,
-  activeTab: 'overview',      // 'overview' | 'holdings' | 'transactions' | 'performance' | 'debug'
+  activeTab: 'overview',      // 'overview' | 'holdings' | 'transactions' | 'activity' | 'performance' | 'debug'
   helpOpen: false,
   holdingsPage: 1, holdingsPageSize: 10,
   holdingsSort: { col: 'value', dir: 'desc' },
@@ -133,6 +133,15 @@ A `◆ MyFolio View` / `◆ Standard View` toggle button (fixed, bottom-right) c
 ### Transactions
 - Chronological activity (newest first); color-coded type badges; pagination (10/page)
 - Columns: Date, Type, Symbol, Description, Qty, Price, Amount
+
+### Activity
+- External cash flows only: deposits, withdrawals, rollovers, beneficiary transfers (CDW), journal entries
+- Summary bar: Total Deposited / Total Withdrawn / Net Contributions
+- Transactions grouped by calendar month, newest first
+- **Load Activity Data** button (or **↺ Refresh**): calls `openActivityPage()` which opens `https://accountview.lpl.com/web/activity?mf_auto=activity` in a new tab
+  - The new tab's content script runs the full interceptor; when the activity endpoint fires, data is parsed and written to `cachedTransactions` in `chrome.storage.local`
+  - A `chrome.storage.onChanged` listener in the original tab detects the update and merges new rows into `state.transactions`, re-synthesizes, and refreshes the UI
+  - The new tab detects `?mf_auto=activity` on load, waits for `cachedTransactions` to change, then calls `window.close()` automatically
 
 ### Performance
 - Portfolio value over time chart (canvas)
@@ -210,7 +219,7 @@ All `chrome.*` calls are wrapped in guards that silently swallow "Extension cont
 {
   "manifest_version": 3,
   "name": "MyFolio",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "A cleaner, modern dashboard overlay for LPL AccountView. Personal-use tool — no personal data ever leaves your browser.",
   "homepage_url": "https://github.com/StephenRJohns/myfolio",
   "permissions": ["storage", "scripting"],

@@ -27,6 +27,7 @@ WHAT YOU GET
 ▸ Overview — Total portfolio value, today's change, per-account cards. Click any card to drill into a single account.
 ▸ Holdings — Full positions table with allocation %, gain/loss $, and gain/loss %. Sortable. Allocation donut chart.
 ▸ Transactions — Chronological activity with color-coded type badges.
+▸ Activity — Cash flows only: deposits, withdrawals, rollovers, and transfers. Shows net contributions and one-click data loading.
 ▸ Performance — "Growth of $10,000" chart comparing your portfolio against benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD). Period returns table (YTD / 1Y / 3Y / 5Y).
 ▸ Custom date ranges — Pick any start/end date on the Overview chart.
 ▸ Debug tab — Triple-tap Shift to reveal a network-response log for troubleshooting.
@@ -52,7 +53,7 @@ MIT License — https://github.com/StephenRJohns/myfolio
 |---|---|
 | **Primary category** | Productivity |
 | **Language** | English (United States) |
-| **Version** | 1.5.1 |
+| **Version** | 1.6.0 |
 | **Homepage URL** | https://github.com/StephenRJohns/myfolio |
 | **Support URL** | https://github.com/StephenRJohns/myfolio/issues |
 | **Privacy policy URL** | https://github.com/StephenRJohns/myfolio/blob/main/legal/PRIVACY.md |
