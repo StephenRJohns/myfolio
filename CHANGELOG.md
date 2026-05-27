@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.10] — 2026-05-27
+
+### Changed
+- Account card last-four digits now render in the same font, size, and color as the account name instead of a smaller muted style.
+
+---
+
 ## [1.6.9] — 2026-05-27
 
 ### Changed

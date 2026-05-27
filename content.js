@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.9';
+const MF_VERSION = 'v1.6.10';
 
 const state = {
   accounts: [],
@@ -1948,7 +1948,7 @@ function renderAccountCard(a) {
   const last4 = a.accountNumber ? String(a.accountNumber).slice(-4) : '';
   return `
           <div class="mf-account-card mf-clickable" data-acct-id="${escHtml(a.id)}" role="button" tabindex="0">
-            <div class="mf-account-name">${escHtml(a.name)}${last4 ? ` <span style="color:#64748b;font-size:11px;font-weight:400">··${escHtml(last4)}</span>` : ''}</div>
+            <div class="mf-account-name">${escHtml(a.name)}${last4 ? ` ··${escHtml(last4)}` : ''}</div>
             <div class="mf-account-type">${escHtml(a.type || '')}</div>
             <div class="mf-account-value">${fmt$(a.value)}</div>
             ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
