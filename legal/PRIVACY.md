@@ -1,6 +1,6 @@
 # MyFolio — Privacy Policy
 
-**Effective date:** 2026-05-15
+**Effective date:** 2026-05-27
 **Operator:** JJJJJ Enterprises, LLC ("we", "us", "our")
 **Service:** MyFolio, a Chrome browser extension (the "Service")
 
@@ -74,9 +74,9 @@ The Service does not:
 - **Aggregate, anonymize, or de-identify data for any secondary use**
 - **Use data to build profiles, segments, audiences, or any inference about you**
 - **Use data to train, fine-tune, evaluate, or improve any AI/ML model**, ours or anyone else's
-- **Retain data** beyond the lifetime of the browser tab where it was processed
+- **Transmit financial or account data outside your device** — all financial data the extension reads stays in your browser (memory or local storage only)
 
-Closing the LPL tab discards all data the extension was holding in memory. Uninstalling the extension removes the small amount of local-only preference data described in Section 4.
+Closing the LPL tab discards all data the extension was holding in memory. Some financial data is also cached in your browser's local storage so the dashboard can restore quickly on your next visit — see Section 4 for the full list. Uninstalling the extension removes all locally-stored data.
 
 ## 3. What Data the Service DOES Read (In Memory, In Your Browser)
 
@@ -84,26 +84,33 @@ While you are logged in to your brokerage's website and have opened the MyFolio 
 
 | Category | Specific Data | Where It Goes |
 |---|---|---|
-| Account information | Account names, account numbers, account types, balances, day changes | Displayed in the MyFolio Overview tab in your browser. Discarded when the tab is closed. |
-| Holdings / positions | Symbols, descriptions, quantities, prices, market values, gain/loss | Displayed in the MyFolio Holdings tab in your browser. Discarded when the tab is closed. |
-| Transaction / activity history | Dates, types, symbols, amounts, prices, quantities | Displayed in the MyFolio Transactions tab in your browser. Discarded when the tab is closed. |
-| Portfolio performance data | Period returns, daily values, chart data | Displayed in the MyFolio Performance tab in your browser. Discarded when the tab is closed. |
+| Account information | Account names, account numbers, account types, balances, day changes | Displayed in the MyFolio Overview tab in your browser. Held in memory; discarded when the tab is closed. |
+| Holdings / positions | Symbols, descriptions, quantities, prices, market values, gain/loss | Displayed in the MyFolio Holdings tab in your browser. Held in memory; discarded when the tab is closed. |
+| Transaction / activity history | Dates, types, symbols, amounts, prices, quantities | Displayed in the MyFolio Transactions and Activity tabs. Also cached in your browser's local storage so the chart reconstruction works on subsequent visits without re-visiting the activity page (see Section 4). Never transmitted anywhere. |
+| Portfolio daily value history | Date + portfolio value pairs used to draw the chart | Displayed in the Overview and Performance charts. Also cached in your browser's local storage for up to 24 hours so the chart reloads without requiring a fresh visit to the Performance page (see Section 4). Never transmitted anywhere. |
+| Period returns | YTD, 1Y, 3Y, 5Y return figures | Displayed in the MyFolio Performance tab in your browser. Held in memory; discarded when the tab is closed. |
 
-All of this data is **read once, held in browser memory only**, and is gone the moment you close the tab. It is never written to disk (other than the small preference cache described in Section 4), never transmitted anywhere, and never seen by anyone but you.
+All of this data stays entirely within your browser. It is never transmitted to any server, never seen by anyone but you, and is not accessible to JJJJJ Enterprises, LLC in any form.
 
 ## 4. What the Service Stores Locally (In Your Browser, Not On Any Server)
 
-The Service stores a small amount of non-sensitive preference data in your own browser's local storage:
+The Service stores data in your own browser's local storage (`chrome.storage.local`) so the dashboard can restore quickly on subsequent visits without requiring you to re-navigate to each brokerage page. Nothing in this list is transmitted to any external server.
 
-| Stored Data | Where | Why |
-|---|---|---|
-| **Selected benchmark tickers** (e.g., `["spy","vti","agg"]`) | `localStorage` (your browser, this domain only) | So your benchmark preferences persist between sessions |
-| **Average load time samples** (millisecond integers) | `chrome.storage.local` (your browser only) | So we can show an accurate ETA while waiting for pages to load |
-| **Cached benchmark price history** (public ETF prices fetched from stooq.com) | `chrome.storage.local` (your browser only) | So we don't re-fetch the same public data more than once per 24 hours |
+| Stored Data | Where | Why | Retention |
+|---|---|---|---|
+| **Selected benchmark tickers** (e.g., `["spy","vti","agg"]`) | `chrome.storage.local` | So your benchmark preferences persist between sessions | Until you change them or uninstall |
+| **Average load time samples** (millisecond integers, no account data) | `chrome.storage.local` | So we can show an accurate ETA while waiting for pages to load | Until uninstall |
+| **Cached benchmark price history** (public ETF closing prices from Stooq/Yahoo Finance) | `chrome.storage.local` | So we don't re-fetch the same public data more than once per 24 hours | 24 hours, then refreshed |
+| **Cached portfolio daily value history** (date + total portfolio value pairs) | `chrome.storage.local` | So the Overview chart reloads on revisit without requiring a fresh visit to the Performance page | 24 hours, then refreshed |
+| **Cached per-account daily value history** (date + per-account value pairs) | `chrome.storage.local` | So per-account charts reload on revisit | 24 hours, then refreshed |
+| **Cached transaction / activity history** (dates, types, symbols, amounts, quantities) | `chrome.storage.local` | So chart reconstruction for recently-opened accounts works on every visit after you load the activity page once | Until uninstall or schema upgrade |
+| **LPL-assigned account identifiers** (account IDs as provided by the brokerage's API) | `chrome.storage.local` | Used to correlate daily-value series with the correct account on reload | 24 hours, then refreshed |
+| **Saved API request metadata** (URL and HTTP method for the value-over-time and activity endpoints, no response data) | `chrome.storage.local` | So the extension can proactively refresh chart data on startup without user navigation | Until schema upgrade |
+| **Cache schema version** (an integer) | `chrome.storage.local` | Used to invalidate caches written by older versions of the extension | Until uninstall |
 
-**None of this contains your name, your account number, your balance, your holdings, your transactions, or any data about you personally.** It contains preferences (which benchmarks you ticked) and public market data (ETF prices that anyone in the world can fetch). It is encrypted at rest by Chrome and is private to your browser profile.
+**All of the above is stored only in your browser, on your device.** It is encrypted at rest by Chrome, private to your browser profile, and inaccessible to JJJJJ Enterprises, LLC or any third party. The financial data items (transaction history, daily values, account IDs) are your own data stored locally for your own convenience — they never leave your device.
 
-To clear it, uninstall the extension or use Chrome's site-data settings.
+To clear all of it, uninstall the extension. Individual items also expire and are replaced on the schedule noted above.
 
 ## 5. Outbound Network Requests the Service Makes
 
@@ -150,7 +157,7 @@ As with any HTTP request to any website, the server receiving the request will s
 
 ## 8. Third-Party Subprocessors
 
-We have **none**. We engage no third party to process personal data on our behalf because we don't collect personal data in the first place. The only third party MyFolio touches at all is Stooq, and only for public market data, and only at your option.
+We have **none**. We engage no third party to process personal data on our behalf because we don't collect personal data in the first place. The only third parties MyFolio contacts at all are Stooq and Yahoo Finance (automatic fallback), and only for public benchmark price data, and only when you have selected at least one benchmark on the Performance tab.
 
 ## 9. Geographic Scope
 
