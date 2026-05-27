@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.8';
+const MF_VERSION = 'v1.6.9';
 
 const state = {
   accounts: [],
@@ -1649,6 +1649,7 @@ const HELP_CONTENT = {
       </ul>
       <h4>Account cards</h4>
       <ul>
+        <li>Each card shows the account name followed by the last four digits of the account number (e.g. <em>Retirement ··8414</em>), matching the labels used in the Account Performance Comparison chart.</li>
         <li><strong>Click any account card</strong> to filter the entire dashboard (Overview, Holdings, Transactions, Performance) to just that account.</li>
         <li>While filtered to a single account, an "← All Accounts" chip returns you to the full portfolio view. Click the × on any active filter chip to clear it individually.</li>
         <li>Accounts with $0 balance and no activity (closed or transfer-only) are hidden automatically. The status bar shows a parenthetical count inline — e.g. <em>4 accounts (2 $0/closed hidden)</em>.</li>
@@ -1944,9 +1945,10 @@ function renderContent() {
 }
 
 function renderAccountCard(a) {
+  const last4 = a.accountNumber ? String(a.accountNumber).slice(-4) : '';
   return `
           <div class="mf-account-card mf-clickable" data-acct-id="${escHtml(a.id)}" role="button" tabindex="0">
-            <div class="mf-account-name">${escHtml(a.name)}</div>
+            <div class="mf-account-name">${escHtml(a.name)}${last4 ? ` <span style="color:#64748b;font-size:11px;font-weight:400">··${escHtml(last4)}</span>` : ''}</div>
             <div class="mf-account-type">${escHtml(a.type || '')}</div>
             <div class="mf-account-value">${fmt$(a.value)}</div>
             ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.9] — 2026-05-27
+
+### Changed
+- **Account cards now show the last four digits of the account number** (e.g. `Retirement ··8414`) in a muted style beside the account name, matching the labels already used in the Account Performance Comparison chart legend.
+
+---
+
 ## [1.6.8] — 2026-05-27
 
 ### Added
