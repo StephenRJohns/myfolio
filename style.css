@@ -238,8 +238,13 @@
   letter-spacing: 0.08em;
   color: #f1f5f9;
   margin: 28px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .mf-section-title:first-child { margin-top: 0; }
+.mf-export-btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; padding: 4px 10px; }
 
 /* ── KPI row ─────────────────────────────────────────────────────────────── */
 .mf-kpi-row {
@@ -604,6 +609,7 @@
   transition: background 0.1s;
 }
 .mf-table tbody tr:hover { background: #1e293b; }
+.mf-table tbody tr:hover td { padding-top: 16px; padding-bottom: 16px; font-size: 15px; }
 .mf-table tbody tr.mf-row-clickable { cursor: pointer; }
 .mf-table tbody tr.mf-row-clickable:hover { background: #243149; }
 .mf-table tbody tr.mf-row-clickable:focus-visible {
@@ -673,7 +679,7 @@
 }
 .mf-pager:hover:not(:disabled) { background: #243149; border-color: #475569; color: #f1f5f9; }
 .mf-pager:disabled { opacity: 0.35; cursor: not-allowed; }
-.mf-table tbody td { padding: 10px 12px; color: #f1f5f9; }
+.mf-table tbody td { padding: 10px 12px; color: #f1f5f9; transition: padding 0.12s ease, font-size 0.12s ease; }
 .mf-table tfoot td { padding: 10px 12px; border-top: 1px solid #334155; color: #e2e8f0; }
 .mf-table .highlight { background: #1a1f40; }
 .mf-table .right { text-align: right; }
@@ -696,6 +702,28 @@
 .mf-txn-badge.sell, .mf-txn-badge.sale { background: #2d1515; color: #f87171; }
 .mf-txn-badge.dividend { background: #1c1a3e; color: #a78bfa; }
 .mf-txn-badge.transfer { background: #1c2a3e; color: #60a5fa; }
+
+/* ── Transaction row expansion ──────────────────────────────────────────── */
+.mf-txn-detail-row { display: none; }
+.mf-txn-group:hover .mf-txn-detail-row { display: table-row; }
+.mf-txn-group:hover .mf-txn-detail-row td,
+.mf-table tbody tr.mf-txn-detail-row:hover td { padding: 0 12px 12px; background: #1e293b; font-size: 13px; }
+.mf-txn-detail-desc {
+  font-size: 14px;
+  color: #f1f5f9;
+  line-height: 1.5;
+  padding-bottom: 8px;
+  word-break: break-word;
+}
+.mf-txn-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+.mf-txn-detail-item { white-space: nowrap; }
+.mf-txn-detail-lbl { font-weight: 600; color: #64748b; margin-right: 4px; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
 .pos { color: #4ade80; }

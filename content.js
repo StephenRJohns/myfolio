@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.10';
+const MF_VERSION = 'v1.6.11';
 
 const state = {
   accounts: [],
@@ -16,7 +16,8 @@ const state = {
   dailyValues: [],         // [{date, value}] aggregated across accounts
   accountDailyValues: {},  // accountId -> [{date, value}]
   selectedAccountId: null,    // null = view all; 'portfolio' acts the same as null
-  selectedAssetClass: null,   // asset-class label set by clicking an allocation slice
+  selectedAssetClass: null,   // asset-class label set by hovering an allocation slice
+  _allocHoverLabel: null,     // dedup: last hovered label so we don't re-render on same slice
   selectedSymbol: null,       // ticker drilled into from a Holdings row
   helpOpen: false,
   holdingsPage: 1, holdingsPageSize: 10,
@@ -1125,6 +1126,8 @@ function buildOverlay() {
     btn.addEventListener('click', () => {
       overlay.querySelectorAll('.mf-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      state._allocHoverLabel = null;
+      state.selectedAssetClass = null;
       state.activeTab = btn.dataset.tab;
       renderContent();
       // Keep the help panel in sync with the current tab if it's open
@@ -1191,6 +1194,11 @@ function buildOverlay() {
         openActivityPage();
         return;
       }
+
+      // CSV export buttons
+      if (e.target.closest('#mf-export-holdings'))     { exportHoldings();     return; }
+      if (e.target.closest('#mf-export-transactions')) { exportTransactions(); return; }
+      if (e.target.closest('#mf-export-activity'))     { exportActivity();     return; }
 
       // Positions KPI → Holdings tab
       if (e.target.closest('#mf-positions-kpi')) {
@@ -1657,8 +1665,8 @@ const HELP_CONTENT = {
       <h4>Allocation donut</h4>
       <ul>
         <li>Slices are grouped by asset class, using the broker's classification when available.</li>
-        <li><strong>Click any slice — or any row of the legend table</strong> — to filter the Holdings tab to that class and jump there. Click the same item again to clear.</li>
-        <li>An identical donut also appears at the top of the Holdings tab; on that tab, clicking a slice/row filters in place without switching tabs.</li>
+        <li><strong>Click any slice — or any row of the legend table</strong> — to filter the Holdings tab to that class. Click the same item again to clear.</li>
+        <li>An identical donut also appears at the top of the Holdings tab; clicking there filters in place without switching tabs.</li>
       </ul>
       <h4>Chart accuracy &amp; account reconstruction</h4>
       <ul>
@@ -1684,11 +1692,14 @@ const HELP_CONTENT = {
       <ul>
         <li><strong>Click any column header</strong> to sort by that column. Click the same header again to flip ascending ↔ descending. ▲ / ▼ shows the active sort direction.</li>
         <li><strong>Click any row</strong> to drill into that symbol — you'll jump to the Transactions tab filtered to that ticker. The symbol filter shows as a removable chip you can clear later.</li>
+        <li><strong>Hover any row</strong> to expand it — the row grows taller and increases its font size for easier reading.</li>
         <li>Use the <strong>page-size dropdown</strong> at the top of the table to control how many rows show at once (10, 25, 50, 100, or All). Page through with ⏮ ◀ ▶ ⏭. Buttons disable at the first and last page.</li>
+        <li>The <strong>⬇ CSV</strong> button exports all currently-filtered holdings (all pages, not just the visible page) to a CSV file.</li>
       </ul>
       <h4>Filters &amp; donut</h4>
       <ul>
         <li>Active filters (account, asset class, symbol) show as chips at the top. Click the × on any chip to clear it independently.</li>
+        <li><strong>Click any donut slice or legend row</strong> to filter the table to that asset class. Click the same item again to clear. Switching tabs also clears the filter.</li>
         <li>The donut still reflects the current account context even when an asset-class filter is active, so you don't lose your bearings.</li>
         <li>The table footer always totals 100% of the visible rows.</li>
       </ul>
@@ -1711,10 +1722,15 @@ const HELP_CONTENT = {
           </ul>
         </li>
       </ul>
-      <h4>Sorting &amp; paging</h4>
+      <h4>Row detail</h4>
+      <ul>
+        <li><strong>Hover any row</strong> to expand it — the row grows taller with a larger font, and a detail panel appears below showing the complete (untruncated) description, account name, and a labeled summary of all fields.</li>
+      </ul>
+      <h4>Sorting, paging &amp; export</h4>
       <ul>
         <li>Every column is sortable. Default sort is by date descending (most recent first). The sort state persists across tab switches within the session.</li>
         <li>Page-size and navigation controls work just like the Holdings tab (10, 25, 50, 100, or All).</li>
+        <li>The <strong>⬇ CSV</strong> button exports all currently-filtered transactions (all pages) to a CSV file.</li>
       </ul>
       <h4>Drilling in</h4>
       <ul>
@@ -1762,6 +1778,11 @@ const HELP_CONTENT = {
         <li><strong>Total Withdrawn</strong> — sum of all outflows (withdrawals, distributions, journal debits).</li>
         <li><strong>Net Contributions</strong> — Deposited minus Withdrawn. This is the total external money you have added to the portfolio over the captured history.</li>
         <li>Use the <strong>↺ Refresh</strong> button to open the LPL Activity page and capture any new cash flows. The tab closes automatically once data is saved.</li>
+        <li>The <strong>⬇ CSV</strong> button exports all currently-filtered cash flows to a CSV file.</li>
+      </ul>
+      <h4>Row detail</h4>
+      <ul>
+        <li><strong>Hover any row</strong> to expand it — the row grows taller with a larger font, and a detail panel appears below showing the complete description, account name, type, and amount.</li>
       </ul>
       <h4>Loading data</h4>
       <ul>
@@ -2134,7 +2155,7 @@ function renderHoldings() {
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
-      <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a row to see its transactions · click a header to sort</span></h3>
+      <h3 class="mf-section-title">Holdings <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a row to see its transactions · click a header to sort</span> <button class="mf-btn-secondary mf-export-btn" id="mf-export-holdings" title="Export all filtered holdings to CSV">⬇ CSV</button></h3>
       <div class="mf-alloc-container" style="margin-bottom:24px">
         <canvas id="mf-alloc-chart" width="240" height="240"></canvas>
         <div class="mf-alloc-legend" id="mf-alloc-legend"></div>
@@ -2203,7 +2224,7 @@ function renderTransactions() {
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
-      <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a header to sort</span></h3>
+      <h3 class="mf-section-title">Recent Transactions <span class="mf-badge">${sorted.length}</span> <span class="mf-hint">click a header to sort</span> <button class="mf-btn-secondary mf-export-btn" id="mf-export-transactions" title="Export all filtered transactions to CSV">⬇ CSV</button></h3>
       ${renderPaginationBar('txn', sorted.length, page, state.txnPageSize)}
       <table class="mf-table">
         <thead><tr>
@@ -2215,8 +2236,12 @@ function renderTransactions() {
           ${renderSortableHeader('txn', 'price',       'Price',  { right: true })}
           ${renderSortableHeader('txn', 'amount',      'Amount', { right: true })}
         </tr></thead>
-        <tbody>
-          ${slice.map(t => `
+        ${slice.map(t => {
+          const acct = state.accounts.find(a => a.id === t.accountId);
+          const acctLabel = acct ? escHtml(acct.name + (acct.accountNumber ? ` ··${String(acct.accountNumber).slice(-4)}` : '')) : escHtml(t.accountId || '');
+          const valueCell = (t.quantity && t.price) ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Value</span> ${fmt$(Math.abs(t.quantity * t.price))}</span>` : '';
+          return `
+          <tbody class="mf-txn-group">
             <tr>
               <td class="date">${fmtDate(t.date)}</td>
               <td><span class="mf-txn-badge ${(t.type || '').toLowerCase()}">${escHtml(t.type)}</span></td>
@@ -2226,8 +2251,21 @@ function renderTransactions() {
               <td class="right">${t.price ? fmt$(t.price) : '—'}</td>
               <td class="right ${t.amount >= 0 ? 'pos' : 'neg'}">${fmt$(Math.abs(t.amount))}</td>
             </tr>
-          `).join('')}
-        </tbody>
+            <tr class="mf-txn-detail-row">
+              <td colspan="7">
+                <div class="mf-txn-detail-desc">${escHtml(t.description)}</div>
+                <div class="mf-txn-detail-meta">
+                  ${acctLabel ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Account</span> ${acctLabel}</span>` : ''}
+                  ${t.symbol ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Symbol</span> ${escHtml(t.symbol)}</span>` : ''}
+                  ${t.quantity ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Qty</span> ${fmtNum(t.quantity)}</span>` : ''}
+                  ${t.price ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Price</span> ${fmt$(t.price)}</span>` : ''}
+                  ${valueCell}
+                  <span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Amount</span> <span class="${t.amount >= 0 ? 'pos' : 'neg'}">${fmt$(Math.abs(t.amount))}</span></span>
+                </div>
+              </td>
+            </tr>
+          </tbody>`;
+        }).join('')}
       </table>
     </div>
   `;
@@ -2583,7 +2621,8 @@ function renderActivity() {
         <div class="mf-activity-stat-label">Net Contributions</div>
         <div class="mf-activity-stat-value ${netContrib >= 0 ? 'pos' : 'neg'}">${fmt$(netContrib)}</div>
       </div>
-      <div style="margin-left:auto">
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="mf-btn-secondary mf-export-btn" id="mf-export-activity" title="Export all cash flows to CSV">⬇ CSV</button>
         <button class="mf-btn-secondary" id="mf-reload-activity-btn" title="Refresh activity data from LPL">↺ Refresh</button>
       </div>
     </div>` : '';
@@ -2599,23 +2638,35 @@ function renderActivity() {
       const sign = v >= 0 ? 'pos' : 'neg';
       const typeCode = (t.type || '').toUpperCase();
       const desc = t.description || typeCode || '—';
-      const acctName = !acct ? (() => {
-        const a = state.accounts.find(x => x.id === t.accountId);
-        return a ? `<span class="mf-txn-acct">${escHtml(a.name)}</span>` : '';
-      })() : '';
-      return `<tr>
-        <td>${fmtDateShort(t.date)}</td>
-        <td><span class="mf-badge mf-badge-cf">${escHtml(typeCode)}</span></td>
-        <td>${escHtml(desc)}${acctName}</td>
-        <td class="${sign}" style="text-align:right">${v >= 0 ? '+' : ''}${fmt$(v)}</td>
-      </tr>`;
+      const acctObj = state.accounts.find(x => x.id === t.accountId);
+      const acctName = (!acct && acctObj) ? `<span class="mf-txn-acct">${escHtml(acctObj.name)}</span>` : '';
+      const acctLabel = acctObj ? escHtml(acctObj.name + (acctObj.accountNumber ? ` ··${String(acctObj.accountNumber).slice(-4)}` : '')) : escHtml(t.accountId || '');
+      return `
+      <tbody class="mf-txn-group">
+        <tr>
+          <td>${fmtDateShort(t.date)}</td>
+          <td><span class="mf-badge mf-badge-cf">${escHtml(typeCode)}</span></td>
+          <td>${escHtml(desc)}${acctName}</td>
+          <td class="${sign}" style="text-align:right">${v >= 0 ? '+' : ''}${fmt$(v)}</td>
+        </tr>
+        <tr class="mf-txn-detail-row">
+          <td colspan="4">
+            <div class="mf-txn-detail-desc">${escHtml(t.description || desc)}</div>
+            <div class="mf-txn-detail-meta">
+              ${acctLabel ? `<span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Account</span> ${acctLabel}</span>` : ''}
+              <span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Type</span> ${escHtml(typeCode)}</span>
+              <span class="mf-txn-detail-item"><span class="mf-txn-detail-lbl">Amount</span> <span class="${sign}">${v >= 0 ? '+' : ''}${fmt$(v)}</span></span>
+            </div>
+          </td>
+        </tr>
+      </tbody>`;
     }).join('');
     return `
       <div class="mf-activity-month">
         <div class="mf-activity-month-hdr">${escHtml(label)}</div>
         <table class="mf-table" style="width:100%">
           <thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Amount</th></tr></thead>
-          <tbody>${rows}</tbody>
+          ${rows}
         </table>
       </div>`;
   }).join('');
@@ -3858,9 +3909,9 @@ function renderAllocationChart() {
   if (!canvas.dataset.mfWired) {
     canvas.dataset.mfWired = '1';
     canvas.style.cursor = 'pointer';
-    canvas.addEventListener('click', (e) => {
+    const hitSlice = (e) => {
       const sl = canvas.__mfSlices;
-      if (!sl || !sl.length) return;
+      if (!sl || !sl.length) return null;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -3868,13 +3919,19 @@ function renderAllocationChart() {
       const y = (e.clientY - rect.top) * scaleY;
       const dx = x - cx, dy = y - cy;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > r + 6 || dist < hole) return;
+      if (dist > r + 6 || dist < hole) return null;
       let a = Math.atan2(dy, dx);
       while (a < -Math.PI / 2) a += 2 * Math.PI;
       while (a >= 3 * Math.PI / 2) a -= 2 * Math.PI;
-      const hit = sl.find(s => a >= s.start && a < s.end);
-      if (!hit) return;
-      toggleAssetClass(hit.label);
+      return sl.find(s => a >= s.start && a < s.end) || null;
+    };
+    canvas.addEventListener('click', (e) => {
+      const hit = hitSlice(e);
+      const label = hit ? hit.label : null;
+      const next = state.selectedAssetClass === label ? null : label;
+      state._allocHoverLabel = next;
+      state.selectedAssetClass = next;
+      renderContent();
     });
   }
   canvas.__mfSlices = slices;
@@ -3898,7 +3955,13 @@ function renderAllocationChart() {
     }).join('')}
   `;
   legendEl.querySelectorAll('.mf-alloc-row').forEach(row => {
-    row.addEventListener('click', () => toggleAssetClass(row.dataset.allocLabel));
+    row.addEventListener('click', () => {
+      const label = row.dataset.allocLabel;
+      const next = state.selectedAssetClass === label ? null : label;
+      state._allocHoverLabel = next;
+      state.selectedAssetClass = next;
+      renderContent();
+    });
   });
 }
 
@@ -4196,6 +4259,75 @@ function fmtDate(d) {
   const dt = new Date(d);
   if (isNaN(dt)) return d;
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// ── CSV export ───────────────────────────────────────────────────────────────
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadCsv(filename, headers, rows) {
+  const lines = [headers, ...rows].map(r => r.map(csvCell).join(','));
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function exportHoldings() {
+  const positions = filteredPositions();
+  const total = positions.reduce((s, p) => s + (p.value || 0), 0);
+  const headers = ['Symbol', 'Name', 'Qty', 'Price', 'Value', 'Alloc %', 'G/L', 'G/L %'];
+  const rows = positions.map(p => [
+    p.symbol,
+    p.name,
+    p.quantity != null ? p.quantity : '',
+    p.price != null ? p.price : '',
+    p.value != null ? p.value : '',
+    total > 0 ? ((p.value / total) * 100).toFixed(2) : '',
+    p.gl != null ? p.gl : '',
+    p.glPct != null ? p.glPct.toFixed(2) : '',
+  ]);
+  downloadCsv('holdings.csv', headers, rows);
+}
+
+function exportTransactions() {
+  const txns = filteredTransactions();
+  const headers = ['Date', 'Type', 'Symbol', 'Description', 'Qty', 'Price', 'Amount', 'Account'];
+  const rows = txns.map(t => {
+    const acct = state.accounts.find(a => a.id === t.accountId);
+    return [
+      t.date,
+      t.type,
+      t.symbol,
+      t.description,
+      t.quantity || '',
+      t.price || '',
+      t.amount != null ? t.amount : '',
+      acct ? acct.name : (t.accountId || ''),
+    ];
+  });
+  downloadCsv('transactions.csv', headers, rows);
+}
+
+function exportActivity() {
+  const acct = getSelectedAccount();
+  const flows = (acct ? state.transactions.filter(t => t.accountId === acct.id) : state.transactions)
+    .filter(isCashFlow)
+    .sort((a, b) => (parseDateLoose(b.date) || 0) - (parseDateLoose(a.date) || 0));
+  const headers = ['Date', 'Type', 'Description', 'Amount', 'Account'];
+  const rows = flows.map(t => {
+    const a = state.accounts.find(x => x.id === t.accountId);
+    return [
+      t.date,
+      t.type,
+      t.description,
+      cashFlowImpact(t),
+      a ? a.name : (t.accountId || ''),
+    ];
+  });
+  downloadCsv('activity.csv', headers, rows);
 }
 
 // ── Secret debug toggle: triple-tap Shift within 800ms ──────────────────────

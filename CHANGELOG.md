@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.11] — 2026-05-27
+
+### Added
+- **CSV export.** Holdings, Transactions, and Activity tabs each have a "⬇ CSV" button that downloads all currently-filtered data as a spreadsheet-ready CSV file.
+- **Transaction and Activity row detail expansion.** Hovering any row in the Transactions or Activity table reveals a detail panel below it showing the complete (untruncated) description, account name, and a summary of all fields for that row.
+
+### Changed
+- **Table rows expand on hover.** Rows in Holdings, Transactions, and Activity tables grow taller and increase their font size when the cursor is over them, making the content easier to read at a glance.
+- **Allocation donut and legend are now click-to-toggle.** Clicking a slice or legend row on either the Overview or Holdings tab filters the holdings table to that asset class; clicking the same item again clears the filter. Switching tabs also clears any active filter.
+
+---
+
 ## [1.6.10] — 2026-05-27
 
 ### Changed

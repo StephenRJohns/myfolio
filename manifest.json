@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyFolio",
-  "version": "1.6.10",
+  "version": "1.6.11",
   "description": "A cleaner, modern dashboard overlay for LPL AccountView. Personal-use tool — no personal data ever leaves your browser.",
   "homepage_url": "https://github.com/StephenRJohns/myfolio",
   "permissions": ["storage"],
