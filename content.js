@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.3';
+const MF_VERSION = 'v1.6.4';
 
 const state = {
   accounts: [],
@@ -1896,6 +1896,7 @@ function renderContent() {
     body.innerHTML = renderOverview();
     renderAllocationChart();
     initOverviewChart();
+    drawAccountSparklines();
     maybeShowStaleActivityDialog();
     return;
   }
@@ -1904,6 +1905,19 @@ function renderContent() {
   if (tab === 'activity') { body.innerHTML = renderActivity(); return; }
   if (tab === 'performance') { body.innerHTML = renderPerformance(); initPerformanceCharts(); return; }
   if (tab === 'debug') renderDebugTab();
+}
+
+function renderAccountCard(a) {
+  return `
+          <div class="mf-account-card mf-clickable" data-acct-id="${escHtml(a.id)}" role="button" tabindex="0">
+            <div class="mf-account-name">${escHtml(a.name)}</div>
+            <div class="mf-account-type">${escHtml(a.type || '')}</div>
+            <div class="mf-account-value">${fmt$(a.value)}</div>
+            ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
+            ${a.ytdReturn != null ? `<div class="mf-account-extra ${a.ytdReturn >= 0 ? 'pos' : 'neg'}">YTD ${fmtPct(a.ytdReturn)}</div>` : ''}
+            ${a.unrealizedGL != null ? `<div class="mf-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
+            <canvas class="mf-account-spark" data-acct-id="${escHtml(a.id)}"></canvas>
+          </div>`;
 }
 
 function renderOverview() {
@@ -2034,18 +2048,9 @@ function renderOverview() {
       </div>
 
       ${!selectedAcct && hasAccounts ? `
-      <h3 class="mf-section-title">Accounts <span class="mf-hint">click any card to filter — Total Portfolio resets</span></h3>
+      <h3 class="mf-section-title">Accounts <span class="mf-hint">click any card to filter</span></h3>
       <div class="mf-account-grid">
-        ${visibleAccounts.map(a => `
-          <div class="mf-account-card mf-clickable" data-acct-id="${escHtml(a.id)}" role="button" tabindex="0">
-            <div class="mf-account-name">${escHtml(a.name)}</div>
-            <div class="mf-account-type">${escHtml(a.type || '')}</div>
-            <div class="mf-account-value">${fmt$(a.value)}</div>
-            ${a.change != null ? `<div class="mf-account-change ${a.change >= 0 ? 'pos' : 'neg'}">${a.change >= 0 ? '▲' : '▼'} ${fmt$(Math.abs(a.change))} (${fmtPct(a.changePct)}) today</div>` : ''}
-            ${a.ytdReturn != null ? `<div class="mf-account-extra ${a.ytdReturn >= 0 ? 'pos' : 'neg'}">YTD ${fmtPct(a.ytdReturn)}</div>` : ''}
-            ${a.unrealizedGL != null ? `<div class="mf-account-gl">Unrealized G/L: <span class="${a.unrealizedGL >= 0 ? 'pos' : 'neg'}">${fmt$(a.unrealizedGL)}</span></div>` : ''}
-          </div>
-        `).join('')}
+        ${visibleAccounts.filter(a => a.id !== 'portfolio').map(renderAccountCard).join('')}
       </div>` : !hasAccounts && !selectedAcct ? `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>` : ''}
 
       ${positionsCount ? `
@@ -3063,6 +3068,58 @@ function drawCashFlowMarkers(ctx, seriesDates, xOfIndex, pad, ch, events) {
     markers.push({ x, amount: ev.amount, date: ev.date });
   }
   return markers;
+}
+
+// Draw a simple value-over-time sparkline inside each account card. Uses the
+// per-account daily series (de-spiked to drop rollover-settlement glitches).
+function drawAccountSparklines() {
+  document.querySelectorAll('canvas.mf-account-spark').forEach(canvas => {
+    const id = canvas.dataset.acctId;
+    const raw = (state.accountDailyValues && state.accountDailyValues[id]) || [];
+    const H = 88;
+    setupCanvas(canvas, H);
+    const ctx = canvas.getContext('2d');
+    const W = canvas.offsetWidth || 220;
+    ctx.clearRect(0, 0, W, H);
+
+    const series = despikeSeries(raw);
+    if (series.length < 2) {
+      ctx.fillStyle = '#475569';
+      ctx.font = '10px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('No value history yet', W / 2, H / 2);
+      return;
+    }
+
+    const vals = series.map(d => d.value);
+    const minV = Math.min(...vals), maxV = Math.max(...vals);
+    const range = (maxV - minV) || 1;
+    const pad = 5;
+    const cw = W - pad * 2, ch = H - pad * 2;
+    const xOf = i => pad + (i / (vals.length - 1)) * cw;
+    const yOf = v => pad + ch - ((v - minV) / range) * ch;
+    const up = vals[vals.length - 1] >= vals[0];
+    const color = up ? '#34d399' : '#f87171';
+
+    const grad = ctx.createLinearGradient(0, pad, 0, pad + ch);
+    grad.addColorStop(0, up ? 'rgba(52,211,153,0.28)' : 'rgba(248,113,113,0.28)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.moveTo(xOf(0), yOf(vals[0]));
+    for (let i = 1; i < vals.length; i++) ctx.lineTo(xOf(i), yOf(vals[i]));
+    ctx.lineTo(xOf(vals.length - 1), pad + ch);
+    ctx.lineTo(xOf(0), pad + ch);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(xOf(0), yOf(vals[0]));
+    for (let i = 1; i < vals.length; i++) ctx.lineTo(xOf(i), yOf(vals[i]));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
 }
 
 function getChartTooltipEl() {

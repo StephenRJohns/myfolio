@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.4] — 2026-05-27
+
+### Added
+- **Per-account value sparklines.** Each account card on the Overview tab is now taller and shows a simple value-over-time sparkline (green if up over the available history, red if down), using the de-spiked per-account daily series.
+
+### Changed
+- Removed the redundant "Total Portfolio" card from the Accounts section — the portfolio total already appears in the KPI row at the top.
+
+---
+
 ## [1.6.3] — 2026-05-27
 
 ### Fixed
