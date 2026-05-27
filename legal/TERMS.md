@@ -1,6 +1,6 @@
 # MyFolio — Terms of Service
 
-**Effective date:** 2026-05-15
+**Effective date:** 2026-05-27
 **Operator:** JJJJJ Enterprises, LLC ("we", "us", "our")
 **Service:** MyFolio, a Chrome browser extension (the "Service")
 

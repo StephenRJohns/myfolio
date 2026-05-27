@@ -18,11 +18,11 @@ A cleaner, modern dashboard overlay for your LPL AccountView retirement / broker
 
 ## What It Does
 
-- **Overview** — total portfolio value, today's $ and % change, per-account cards with day change and unrealized gain/loss, plus a Value Over Time chart with period tabs (All / 1Y / YTD / 1M / Custom date range). Closed/zero-balance accounts auto-hide.
+- **Overview** — total portfolio value, today's $ and % change, per-account cards with day change and unrealized gain/loss, plus a Value Over Time chart with period tabs (All / 1Y / YTD / 1M / Custom date range). Hover either chart (Value Over Time or Account Performance Comparison) to expand it and see a vertical crosshair tooltip with exact values for any date. Closed/zero-balance accounts auto-hide.
 - **Click any account card** to drill into a single account. Every tab — Overview, Holdings, Transactions, Performance, Activity — filters to just that account. A "← All Accounts" breadcrumb returns you to the full view.
 - **Holdings** — sortable table of all positions with allocation %, gain/loss $ and %, and an allocation donut chart.
 - **Transactions** — recent activity in a clean, color-coded chronological table.
-- **Performance** — portfolio value over time, "Growth of $10,000" comparison vs. up to 10 selectable benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD), and a period-return table (YTD, 1Y, 3Y, 5Y).
+- **Performance** — portfolio value over time and "Growth of $10,000" comparison vs. up to 10 selectable benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD), plus a period-return table (YTD, 1Y, 3Y, 5Y). Hover either chart to expand it; the Growth of $10,000 crosshair tooltip shows each line's value plus its percentage of the best performer at that date.
 - **Activity** — external cash flows (deposits, withdrawals, rollovers, transfers, journal entries) with a summary bar showing Total Deposited, Total Withdrawn, and Net Contributions. Also feeds the chart reconstruction for recently-opened accounts. A "Load Activity Data" button opens the brokerage activity page in a new tab, captures the data automatically, and closes the tab — no manual navigation required.
 - **Debug tab** — triple-tap Shift to reveal a network-response log. Useful for diagnosing unexpected behavior; a "⎘ Copy debug log" button packages logs for pasting into a GitHub issue or any AI assistant.
 

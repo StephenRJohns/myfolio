@@ -24,11 +24,11 @@ HOW IT WORKS
 Log in to accountview.lpl.com as normal. Click "◆ MyFolio View" to open your dashboard. Click again to return to the standard site.
 
 WHAT YOU GET
-▸ Overview — Total portfolio value, today's change, per-account cards. Click any card to drill into a single account.
+▸ Overview — Total portfolio value, today's change, per-account cards. Click any card to drill into a single account. Hover the Value Over Time or Account Performance Comparison chart to expand it and see a vertical crosshair tooltip with exact values for any date.
 ▸ Holdings — Full positions table with allocation %, gain/loss $, and gain/loss %. Sortable. Allocation donut chart.
 ▸ Transactions — Chronological activity with color-coded type badges.
 ▸ Activity — Cash flows only: deposits, withdrawals, rollovers, and transfers. Shows net contributions and one-click data loading.
-▸ Performance — "Growth of $10,000" chart comparing your portfolio against benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD). Period returns table (YTD / 1Y / 3Y / 5Y).
+▸ Performance — "Growth of $10,000" chart comparing your portfolio against benchmark ETFs (SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD). Hover either chart to expand it; the Growth of $10,000 crosshair tooltip shows each line's value plus its percentage of the best performer at that date. Period returns table (YTD / 1Y / 3Y / 5Y).
 ▸ Custom date ranges — Pick any start/end date on the Overview chart.
 ▸ Debug tab — Triple-tap Shift to reveal a network-response log for troubleshooting.
 
@@ -53,7 +53,7 @@ MIT License — https://github.com/StephenRJohns/myfolio
 |---|---|
 | **Primary category** | Productivity |
 | **Language** | English (United States) |
-| **Version** | 1.6.0 |
+| **Version** | 1.6.8 |
 | **Homepage URL** | https://github.com/StephenRJohns/myfolio |
 | **Support URL** | https://github.com/StephenRJohns/myfolio/issues |
 | **Privacy policy URL** | https://github.com/StephenRJohns/myfolio/blob/main/legal/PRIVACY.md |

@@ -407,6 +407,14 @@
   flex-direction: column;
   min-height: 260px;
 }
+.mf-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
 .mf-account-spark {
   display: block;
   width: 100%;
@@ -898,13 +906,40 @@
   background: #0b1220;
   border: 1px solid #334155;
   border-radius: 6px;
-  padding: 6px 10px;
-  font: 12px/1.4 system-ui, sans-serif;
+  padding: 8px 12px;
+  font: 24px/1.4 system-ui, sans-serif;
   color: #e2e8f0;
   box-shadow: 0 6px 20px rgba(0,0,0,0.5);
   white-space: nowrap;
+  min-width: 160px;
 }
 #mf-chart-tip strong { color: #f1f5f9; }
+
+/* ── Chart hover-expand + crosshair ─────────────────────────────────────────── */
+.mf-chart-hover-wrap {
+  position: relative;
+  overflow: visible;
+}
+.mf-chart-crosshair {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  pointer-events: none;
+  background: rgba(255,255,255,0.18);
+  display: none;
+  z-index: 10;
+}
+.mf-chart-crosshair::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.5;
+  top: var(--dot-top, 0px);
+}
 
 .mf-debug-log {
   background: #060c18;

@@ -10,7 +10,7 @@ A **Chrome extension (Manifest V3)** called **MyFolio** that overlays a clean, m
 
 **Publisher:** JJJJJ Enterprises, LLC
 **License:** MIT
-**Current version:** 1.6.0
+**Current version:** 1.6.8
 **Language:** Vanilla JavaScript (ES2020+), no build step, no npm, no bundler, no external libraries
 
 ---
@@ -124,6 +124,9 @@ A `◆ MyFolio View` / `◆ Standard View` toggle button (fixed, bottom-right) c
 - Clicking an account card enters **drill-in mode** — all tabs filter to that account; a `← All Accounts` breadcrumb returns to full view
 - **Value Over Time chart** (canvas): period tabs `All | 1Y | YTD | 1M | Custom`
   - Custom period opens an inline date range picker (two `<input type="date">` fields with live preview)
+  - Hover to expand chart (~1.5× height); vertical crosshair tracks cursor and tooltip shows date, portfolio value, invested capital, and cash-flow amount (when near a marker)
+- **Account Performance Comparison chart** (canvas): one line per account, each indexed to 100 at inception, cash-flow-adjusted TWR
+  - Hover to expand; crosshair tooltip shows each account's cumulative return % at that date
 
 ### Holdings
 - Sortable positions table; columns: Symbol, Name, Qty, Price, Market Value, Alloc%, G/L $, G/L%
@@ -144,8 +147,8 @@ A `◆ MyFolio View` / `◆ Standard View` toggle button (fixed, bottom-right) c
   - The new tab detects `?mf_auto=activity` on load, waits for `cachedTransactions` to change, then calls `window.close()` automatically
 
 ### Performance
-- Portfolio value over time chart (canvas)
-- "Growth of $10,000" multi-line chart vs. up to 10 selectable benchmark ETFs: SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD
+- Portfolio value over time chart (canvas); hover to expand, crosshair tooltip shows exact dollar value for any date
+- "Growth of $10,000" multi-line chart vs. up to 10 selectable benchmark ETFs: SPY, VTI, QQQ, IWM, VXUS, AGG, TLT, TIP, VNQ, GLD; hover to expand; crosshair tooltip shows each line's value and its percentage of the best performer at that date (`showPctOfBest: true` in config)
 - Period returns table: YTD / 1Y / 3Y / 5Y (portfolio + each benchmark)
 
 ### Debug (hidden)
@@ -177,6 +180,28 @@ Both `modifiedDietzReturn` and `buildTwrSeries` **must also use `cashFlowImpact(
 All date comparisons use `dayOf(d) = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()` to normalize both local-midnight series entries and UTC-timestamped transactions to the same calendar day.
 
 Reconstruction requires the user to visit the brokerage Activity page once per session. Transactions are then persisted in `cachedTransactions` so subsequent page loads don't lose the data.
+
+### Chart Hover Interactivity
+All four time-series canvases (overview value, account comparison, perf value, growth-of-$10k) share two behaviors wired up by `attachChartCrosshair(canvas, config)` called at the end of each draw function:
+
+1. **Hover-to-expand**: `canvas._mfExpanded` is toggled on mouseenter/mouseleave. Each draw function reads it to choose between `defaultH` and `expandedH` at the top: `const H = canvas._mfExpanded ? EXPANDED_H : DEFAULT_H;`. Toggling calls `config.redrawFn()`, which re-enters the draw function at the new height.
+
+2. **Crosshair + tooltip**: `ensureChartWrapper(canvas)` inserts a `position:relative` wrapper div (or reuses `.mf-chart-wrap`) and appends a `.mf-chart-crosshair` div as the vertical line. On mousemove, the nearest date index is found by `Math.round((mx - pad.left) / cw * (n-1))`, the crosshair is positioned, and the shared `#mf-chart-tip` tooltip is populated with date + per-line values (looked up via pre-built `Map<date, value>` per line). The Growth of $10,000 chart also sets `showPctOfBest: true` in its config, which adds a `(X.X%)` annotation showing each line's value as a fraction of the best-performing line at that date.
+
+Config shape:
+```js
+{
+  lines: [{ label, color, points: [{date, value}] }],
+  allDates: string[],
+  pad: { top, right, bottom, left },
+  defaultH: number,
+  expandedH: number,
+  redrawFn: () => void,
+  formatValue: (v: number) => string,
+  markers?: [{ x, amount, date }],   // cash-flow markers for secondary tooltip row
+  showPctOfBest?: boolean,           // Growth chart only
+}
+```
 
 ### Extension Context Safety
 All `chrome.*` calls are wrapped in guards that silently swallow "Extension context invalidated" errors (thrown when the extension is reloaded while a tab is still open). A global `window.addEventListener('error', ...)` sink suppresses any that escape async paths.
@@ -219,7 +244,7 @@ All `chrome.*` calls are wrapped in guards that silently swallow "Extension cont
 {
   "manifest_version": 3,
   "name": "MyFolio",
-  "version": "1.6.0",
+  "version": "1.6.8",
   "description": "A cleaner, modern dashboard overlay for LPL AccountView. Personal-use tool — no personal data ever leaves your browser.",
   "homepage_url": "https://github.com/StephenRJohns/myfolio",
   "permissions": ["storage", "scripting"],

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.8] — 2026-05-27
+
+### Added
+- **Hover-to-expand charts.** All four time-series charts (Overview: Value Over Time and Account Performance Comparison; Performance: Portfolio Value Over Time and Growth of $10,000) now expand to ~1.5× their normal height when hovered, making values and tick labels easier to read without switching views.
+- **Vertical crosshair with date/value tooltip.** Hovering any of the four charts shows a vertical crosshair line that tracks the cursor's x-position and a tooltip showing the exact date and each line's value at that point. Cash-flow markers (deposits/withdrawals) surface their amount in the same tooltip when the cursor is near one.
+- **"% of best" annotation on Growth of $10,000.** The crosshair tooltip on the Growth of $10,000 chart shows each line's dollar value followed by a parenthetical percentage of the best-performing line at that date, so you can instantly see how far ahead or behind each benchmark or your portfolio is relative to the leader.
+
+---
+
+## [1.6.7] — 2026-05-27
+
+### Fixed
+- **Account values and day changes now match LPL's overview exactly.** MyFolio was showing prior-day close values (from AccountInfo/account-vot) and an unreliable day change. It now uses the live `accountIntraDay` data — `totalAccountValue` for value and `netChange1d` for day change, both per-account and portfolio-wide — which is the exact source LPL's overview displays. Account cards now sum to the total, and the previously-suppressed ••8414 "today" line returns with the correct figure. The endpoint's buggy `dayChange`/`dayChangePercentage` fields are ignored. Live values are applied regardless of endpoint arrival order.
+- **MTD return no longer shows implausible figures (was 305.52%).** Period returns (MTD/1Y/etc.) now use the same funding-day-neutralized TWR as the Growth of $10,000 chart instead of Modified Dietz, which depended on cash-flow dollar amounts that are unreliable for in-kind rollover transfers. YTD continues to prefer LPL's authoritative figure.
+
+---
+
 ## [1.6.6] — 2026-05-27
 
 ### Changed

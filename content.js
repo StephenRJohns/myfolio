@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.6';
+const MF_VERSION = 'v1.6.8';
 
 const state = {
   accounts: [],
@@ -33,6 +33,8 @@ const state = {
   loadStart: null,
   avgLoadMs: null,
   sessionRecorded: false,
+  intradayPortfolio: null,             // { value, change, changePct } live totals from accountIntraDay
+  intradayAccounts: [],                // [{ id, accountNumber, value, change, changePct }] live per-account
   transactionCacheSavedAt: null,       // timestamp of last successful transaction cache write/restore
   activityStaleDialogDismissed: false, // true once user dismisses the stale-data dialog this session
   debugSearch: '',                     // current Debug-tab search filter
@@ -339,6 +341,9 @@ function parseApiResponse(url, data) {
       const accts = Array.isArray(cd.accounts) ? cd.accounts.map(normalizeBrokerageAccount) : [];
       state.accounts = accts.length ? [portfolio, ...accts] : [portfolio];
       backfillAccountValues();
+      // AccountInfo carries prior-close values and an unreliable dayChange.
+      // Re-apply the live intraday values/day change if we already have them.
+      applyIntradayLive();
       dbg('ok', `AccountInfo: portfolio $${cd.portfolioBalance}, ${accts.length} accounts`, { dayChange: cd.dayChange, dayChangePct: cd.dayChangePercentage });
       refreshOverlay();
       // If account-vot hasn't delivered daily values yet, proactively fetch
@@ -448,27 +453,42 @@ function parseApiResponse(url, data) {
 
   // ── Intraday → best-available balances, positions, transactions ──────────
   if (u.includes('intraday')) {
-    // Portfolio totals from accountIntraDay.clientData
+    // Portfolio + per-account live values and day change from accountIntraDay.
+    // This is the exact source LPL's overview displays. We use netChange1d
+    // (= live value − prior-day close) and totalAccountValue/totalChangePercentage;
+    // the endpoint's `dayChange`/`dayChangePercentage` fields are a different,
+    // unreliable metric (they don't match the overview) so we ignore them.
     const aid = data?.accountIntraDay?.clientData;
     if (aid?.portfolioBalance != null) {
-      if (!state.accounts.length) {
-        state.accounts = [{
-          id: 'portfolio', name: 'Total Portfolio', type: '',
-          value: toNum(aid.portfolioBalance),
-          change: toNum(aid.dayChange),
-          changePct: toNum(aid.dayChangePercentage),
-          ytdReturn: null, unrealizedGL: null,
-        }];
-      } else {
-        // AccountInfo can return wrong dayChange for recently-opened/rollover
-        // accounts. Intraday is always authoritative for day change — overwrite.
-        const portfolio = state.accounts.find(a => a.id === 'portfolio');
-        if (portfolio) {
-          portfolio.change = toNum(aid.dayChange);
-          portfolio.changePct = toNum(aid.dayChangePercentage);
+      state.intradayPortfolio = {
+        value: toNum(aid.portfolioBalance),
+        change: aid.netChange1d != null ? toNum(aid.netChange1d) : toNum(aid.changeTotalAccountValue),
+        changePct: toNum(aid.totalChangePercentage),
+      };
+      if (Array.isArray(aid.accounts)) {
+        state.intradayAccounts = aid.accounts.map(ia => ({
+          id: String(ia.accountId || ia.accountNumber || ''),
+          accountNumber: String(ia.accountNumber || ''),
+          name: ia.accountName || '',
+          type: ia.accountClassName || '',
+          value: toNum(ia.totalAccountValue),
+          change: toNum(ia.netChange1d),
+          changePct: toNum(ia.changePercentage),
+        })).filter(a => a.id);
+      }
+      // Ensure a portfolio entry exists, then create any missing per-account
+      // entries from the intraday data (in case intraday arrives before
+      // AccountInfo). Other endpoints patch ytdReturn / unrealizedGL by id.
+      if (!state.accounts.some(a => a.id === 'portfolio')) {
+        state.accounts.unshift({ id: 'portfolio', name: 'Total Portfolio', type: '', value: null, change: null, changePct: null, ytdReturn: null, unrealizedGL: null });
+      }
+      for (const ia of state.intradayAccounts) {
+        if (!state.accounts.some(a => a.id === ia.id || (ia.accountNumber && a.accountNumber === ia.accountNumber))) {
+          state.accounts.push({ id: ia.id, accountNumber: ia.accountNumber, name: ia.name, type: ia.type, value: null, change: null, changePct: null, ytdReturn: null, unrealizedGL: null });
         }
       }
-      dbg('ok', `Intraday accountIntraDay: portfolio $${aid.portfolioBalance}`, { dayChange: aid.dayChange });
+      applyIntradayLive();
+      dbg('ok', `Intraday accountIntraDay: portfolio $${aid.portfolioBalance}`, { netChange1d: aid.netChange1d, accounts: state.intradayAccounts.length });
       refreshOverlay();
     }
 
@@ -612,6 +632,8 @@ function parseApiResponse(url, data) {
         dbg('info', 'account-vot: no dailyValues (may need a longer date range)', { perAccount: acctDiag });
       }
 
+      // Re-apply live intraday values (value/day change) over the account list.
+      applyIntradayLive();
       refreshOverlay();
     }
   }
@@ -663,6 +685,30 @@ function normalizeTxn(t) {
     quantity: toNum(t.quantity ?? t.shares ?? 0),
     price: toNum(t.price ?? t.tradePrice ?? 0),
   };
+}
+
+// Overwrite portfolio + per-account value and day change with the live intraday
+// figures (accountIntraDay), which is exactly what LPL's overview displays.
+// Idempotent and order-independent: called from every endpoint handler, it
+// re-applies the live data whenever it (or the account list) is present, so
+// AccountInfo's prior-close values never win regardless of arrival order.
+function applyIntradayLive() {
+  if (state.intradayPortfolio) {
+    const pf = state.accounts.find(a => a.id === 'portfolio');
+    if (pf) {
+      pf.value = state.intradayPortfolio.value;
+      pf.change = state.intradayPortfolio.change;
+      pf.changePct = state.intradayPortfolio.changePct;
+    }
+  }
+  for (const ia of state.intradayAccounts || []) {
+    const acct = state.accounts.find(a => a.id === ia.id || (ia.accountNumber && a.accountNumber === ia.accountNumber));
+    if (acct) {
+      if (ia.value != null) acct.value = ia.value;
+      acct.change = ia.change;
+      acct.changePct = ia.changePct;
+    }
+  }
 }
 
 function flattenPerf(data) {
@@ -1513,52 +1559,28 @@ function cashFlowImpact(txn) {
   return 0;
 }
 
-function modifiedDietzReturn(series, transactions, periodStart) {
+// Period return via the same funding-day-neutralized daily TWR the Growth of
+// $10,000 chart uses. This does NOT rely on accurate cash-flow dollar amounts
+// (which are unreliable for in-kind security transfers) — it neutralizes any
+// day with an implausible raw move or a known cash flow, so large rollover
+// deposits don't blow up the return. Returns null when there's no daily bar
+// before periodStart (insufficient history for that frame).
+function twrPeriodReturn(series, transactions, periodStart) {
   if (!series || series.length < 2) return null;
   const parsed = series.map(d => ({ date: parseDateLoose(d.date), value: d.value }))
                        .filter(d => d.date && d.value != null);
   if (parsed.length < 2) return null;
-  const latest = parsed[parsed.length - 1];
-
-  // Find the baseline: the latest bar strictly before periodStart.
-  let bvBar = null;
+  // Baseline: the latest bar strictly before periodStart.
+  let baselineDate = null;
   for (let i = parsed.length - 1; i >= 0; i--) {
-    if (parsed[i].date < periodStart) { bvBar = parsed[i]; break; }
+    if (parsed[i].date < periodStart) { baselineDate = parsed[i].date; break; }
   }
-  if (!bvBar) return null;
-  const BV = bvBar.value;
-  const startDate = bvBar.date;
-  const endDate = latest.date;
-  const totalDays = (endDate - startDate) / 86400000;
-  if (BV <= 0 || totalDays < 1) return null;
-
-  // Compare calendar days, not datetimes. Daily-value series uses local-midnight
-  // timestamps but transactions may carry UTC timestamps (e.g. T07:00:00.000Z =
-  // 02:00 CDT). Raw Date comparison would classify a same-calendar-day deposit as
-  // "after endDate" and exclude it, leaving deposits uncorrected in the return.
-  const dayOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const startDay = dayOf(startDate);
-  const endDay   = dayOf(endDate);
-
-  let netFlow = 0;
-  let weightedFlow = 0;
-  for (const txn of transactions || []) {
-    if (!isCashFlow(txn)) continue;
-    const td = parseDateLoose(txn.date);
-    if (!td) continue;
-    const tdDay = dayOf(td);
-    if (tdDay < startDay || tdDay > endDay) continue;
-    const C = cashFlowImpact(txn);
-    if (C === 0) continue;
-    const daysSinceStart = (tdDay - startDay) / 86400000;
-    const W = (totalDays - daysSinceStart) / totalDays;
-    netFlow += C;
-    weightedFlow += C * W;
-  }
-
-  const denominator = BV + weightedFlow;
-  if (denominator <= 0) return null;
-  return ((latest.value - BV - netFlow) / denominator) * 100;
+  if (!baselineDate) return null;
+  const slice = series.filter(d => { const dt = parseDateLoose(d.date); return dt && dt >= baselineDate; });
+  if (slice.length < 2) return null;
+  const twr = buildTwrSeries(slice, transactions, 100);
+  if (twr.length < 2) return null;
+  return (twr[twr.length - 1].close / 100 - 1) * 100;
 }
 
 // Compute MTD / YTD / 1Y using Modified Dietz, falling back to simple
@@ -1580,16 +1602,16 @@ function periodFramesAccurate(series, transactions) {
   const simple = periodFramesFromSeries(series);
   const txns = transactions || [];
 
-  const md = (start, fallback) => {
-    const r = modifiedDietzReturn(series, txns, start);
+  const tw = (start, fallback) => {
+    const r = twrPeriodReturn(series, txns, start);
     return r != null ? r : fallback;
   };
   return {
-    mtd:    md(monthStart, simple.mtd),
-    ytd:    md(yearStart, simple.ytd),
-    oneY:   md(oneYearAgo, simple.oneY),
-    threeY: md(threeYearAgo, simple.threeY),
-    fiveY:  md(fiveYearAgo, simple.fiveY),
+    mtd:    tw(monthStart, simple.mtd),
+    ytd:    tw(yearStart, simple.ytd),
+    oneY:   tw(oneYearAgo, simple.oneY),
+    threeY: tw(threeYearAgo, simple.threeY),
+    fiveY:  tw(fiveYearAgo, simple.fiveY),
   };
 }
 
@@ -1618,6 +1640,12 @@ const HELP_CONTENT = {
         <li>Use the <strong>All / 1 Year / YTD / 1 Month / Custom</strong> buttons above the chart to change the time window. The stats panel and date-range label next to the section title update to match.</li>
         <li><strong>Custom</strong> opens a popover with Start and End date inputs and an Apply button. Pick any two dates within your captured history and the chart redraws to that window. Useful for zooming in on a specific event (e.g. days around a deposit) when the preset periods are too coarse.</li>
         <li>The blue line is your portfolio value; the orange dotted line is cumulative invested capital. <strong>$</strong> markers indicate captured cash-flow dates.</li>
+        <li><strong>Hover the chart</strong> to expand it for easier reading. A vertical crosshair tracks your cursor and a tooltip shows the exact portfolio value and invested capital for that date. When your cursor is near a <strong>$</strong> marker the tooltip also shows the deposit or withdrawal amount.</li>
+      </ul>
+      <h4>Account Performance Comparison</h4>
+      <ul>
+        <li>Shows each account's time-weighted return since inception on the same axes — deposits and withdrawals are stripped so you see investment performance only.</li>
+        <li><strong>Hover the chart</strong> to expand it and see a crosshair tooltip with each account's cumulative return at that date.</li>
       </ul>
       <h4>Account cards</h4>
       <ul>
@@ -1705,8 +1733,8 @@ const HELP_CONTENT = {
       </ul>
       <h4>What's shown</h4>
       <ul>
-        <li><strong>Portfolio Value Over Time</strong> — your full captured daily-value history, in dollars. Unlike the Overview's chart, this one is not period-filtered.</li>
-        <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. Deposits and withdrawals are stripped out using a daily time-weighted return calculation, so the line shows investment performance only — a large deposit mid-period won't make it spike.</li>
+        <li><strong>Portfolio Value Over Time</strong> — your full captured daily-value history, in dollars. Unlike the Overview's chart, this one is not period-filtered. <strong>Hover</strong> to expand the chart and see a crosshair tooltip with the exact dollar value for any date.</li>
+        <li><strong>Growth of $10,000</strong> — your portfolio (or selected account) normalized to a $10,000 start, plotted against every selected benchmark on the same axes. Deposits and withdrawals are stripped out using a daily time-weighted return calculation, so the line shows investment performance only — a large deposit mid-period won't make it spike. <strong>Hover</strong> to expand the chart; the crosshair tooltip shows each line's dollar value at that date plus a parenthetical <em>% of the best performer</em> so you can instantly see how far ahead or behind each line is relative to the leader.</li>
         <li><strong>Period Returns table</strong> — YTD, 1-Year, 3-Year, 5-Year. Your portfolio appears in the highlighted row; benchmarks below it. 3-Year and 5-Year for your portfolio show — unless you have that much daily-value history captured; benchmarks can show them immediately because Stooq returns up to 5 years of price history.</li>
       </ul>
       <h4>Compare Against (benchmark picker)</h4>
@@ -2637,7 +2665,7 @@ function renderPerformance() {
     ? (selectedAcct.ytdReturn ?? null)
     : (perf.ytdReturn ?? perf.ytd ?? null);
   const portfolioReturns = {
-    ytd:    calcReturns.ytd    ?? brokerYtd,
+    ytd:    brokerYtd          ?? calcReturns.ytd,
     oneY:   calcReturns.oneY   ?? (perf.oneYearReturn ?? perf['1y'] ?? null),
     threeY: calcReturns.threeY ?? (perf.threeYearReturn ?? perf['3y'] ?? null),
     fiveY:  calcReturns.fiveY  ?? (perf.fiveYearReturn ?? perf['5y'] ?? null),
@@ -2766,9 +2794,11 @@ function drawPortfolioValueChart() {
   const canvas = document.getElementById('mf-perf-value');
   const vals = filteredDailyValues();
   if (!canvas || !vals.length) return;
-  setupCanvas(canvas, 260);
+  const DEFAULT_H = 260, EXPANDED_H = 390;
+  const H = canvas._mfExpanded ? EXPANDED_H : DEFAULT_H;
+  setupCanvas(canvas, H);
   const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth, H = 260;
+  const W = canvas.offsetWidth;
   const pad = { top: 16, right: 20, bottom: 36, left: 80 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
@@ -2808,7 +2838,18 @@ function drawPortfolioValueChart() {
 
   const events = cashFlowEventsByDay(filteredTransactions());
   const markers = drawCashFlowMarkers(ctx, vals.map(v => v.date), xOf, pad, ch, events);
-  attachChartTooltip(canvas, markers);
+
+  const allDates = vals.map(v => v.date);
+  attachChartCrosshair(canvas, {
+    lines: [{ label: 'Portfolio Value', color: '#818cf8', points: vals.map(d => ({ date: d.date, value: d.value })) }],
+    allDates,
+    pad,
+    defaultH: DEFAULT_H,
+    expandedH: EXPANDED_H,
+    redrawFn: drawPortfolioValueChart,
+    formatValue: fmt$,
+    markers,
+  });
 }
 
 // Build a cash-flow-adjusted growth series starting at startAmount.
@@ -2877,10 +2918,12 @@ function drawGrowthChart() {
     overlay.classList.toggle('mf-hidden', !stillLoading);
   }
 
-  setupCanvas(canvas, 300);
+  const DEFAULT_H = 300, EXPANDED_H = 460;
+  const H = canvas._mfExpanded ? EXPANDED_H : DEFAULT_H;
+  setupCanvas(canvas, H);
 
   const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth, H = 300;
+  const W = canvas.offsetWidth;
   const pad = { top: 16, right: 130, bottom: 36, left: 80 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
@@ -2963,7 +3006,6 @@ function drawGrowthChart() {
 
   const cfEvents = cashFlowEventsByDay(filteredTransactions());
   const growthMarkers = drawCashFlowMarkers(ctx, allDates, (i) => xOf(allDates[i]), pad, ch, cfEvents);
-  attachChartTooltip(canvas, growthMarkers);
 
   // Legend (right side). Each entry occupies a full row containing the
   // colour chip, the label, and the final $ value on a second line — needs
@@ -2985,6 +3027,18 @@ function drawGrowthChart() {
     ctx.fillStyle = final >= 10000 ? '#4ade80' : '#f87171';
     ctx.font = '11px system-ui';
     ctx.fillText(fmt$(Math.round(final)), lx + 20, y + 22);
+  });
+
+  attachChartCrosshair(canvas, {
+    lines: normalized,
+    allDates,
+    pad,
+    defaultH: DEFAULT_H,
+    expandedH: EXPANDED_H,
+    redrawFn: drawGrowthChart,
+    formatValue: (v) => fmt$(Math.round(v)),
+    markers: growthMarkers,
+    showPctOfBest: true,
   });
 }
 
@@ -3188,9 +3242,11 @@ function drawAccountComparisonChart() {
     lines.push({ label: accountShortLabel(a), color: colorMap[a.id] || '#818cf8', points: twr.map(d => ({ date: d.date, value: d.close })) });
   });
 
-  setupCanvas(canvas, 280);
+  const DEFAULT_H = 280, EXPANDED_H = 430;
+  const H = canvas._mfExpanded ? EXPANDED_H : DEFAULT_H;
+  setupCanvas(canvas, H);
   const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth, H = 280;
+  const W = canvas.offsetWidth;
   const pad = { top: 16, right: 168, bottom: 36, left: 56 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
@@ -3261,6 +3317,16 @@ function drawAccountComparisonChart() {
     ctx.fillText(`${finalPct >= 0 ? '+' : ''}${finalPct.toFixed(2)}%`, W - pad.right + 26, ly + 24);
     ly += 32;
   });
+
+  attachChartCrosshair(canvas, {
+    lines,
+    allDates,
+    pad,
+    defaultH: DEFAULT_H,
+    expandedH: EXPANDED_H,
+    redrawFn: drawAccountComparisonChart,
+    formatValue: (v) => `${v >= 100 ? '+' : ''}${(v - 100).toFixed(2)}%`,
+  });
 }
 
 function getChartTooltipEl() {
@@ -3272,6 +3338,188 @@ function getChartTooltipEl() {
     document.body.appendChild(tip);
   }
   return tip;
+}
+
+// Ensure the canvas is wrapped in a position:relative div for crosshair overlay.
+function ensureChartWrapper(canvas) {
+  const parent = canvas.parentElement;
+  if (parent && parent.classList.contains('mf-chart-hover-wrap')) return parent;
+  if (parent && parent.classList.contains('mf-chart-wrap')) {
+    parent.classList.add('mf-chart-hover-wrap');
+    return parent;
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'mf-chart-hover-wrap';
+  canvas.parentNode.insertBefore(wrap, canvas);
+  wrap.appendChild(canvas);
+  return wrap;
+}
+
+// Attach expand-on-hover + vertical crosshair with multi-line tooltip.
+// config: { lines, allDates, pad, defaultH, expandedH, redrawFn, formatValue, markers? }
+// lines: [{label, color, points: [{date, value}]}]
+// markers: optional [{x, amount, date}] cash-flow markers for secondary tooltip row
+function attachChartCrosshair(canvas, config) {
+  if (!canvas) return;
+  if (canvas._mfCrosshairCleanup) canvas._mfCrosshairCleanup();
+
+  canvas._mfCrosshairConfig = config;
+  const wrap = ensureChartWrapper(canvas);
+
+  let crosshair = wrap.querySelector('.mf-chart-crosshair');
+  if (!crosshair) {
+    crosshair = document.createElement('div');
+    crosshair.className = 'mf-chart-crosshair';
+    wrap.appendChild(crosshair);
+  }
+
+  // Build per-line date→value lookup maps for fast tooltip rendering
+  const lookups = config.lines.map(l => {
+    const m = new Map();
+    for (const p of l.points) m.set(p.date, p.value);
+    return m;
+  });
+
+  // Find nearest point value in a line when exact date isn't present
+  const targetTimes = new Map();
+  const getTargetTime = (date) => {
+    if (!targetTimes.has(date)) targetTimes.set(date, new Date(date).getTime());
+    return targetTimes.get(date);
+  };
+  const nearestValue = (line, targetDate) => {
+    const li = config.lines.indexOf(line);
+    const exact = lookups[li].get(targetDate);
+    if (exact != null) return exact;
+    const tt = getTargetTime(targetDate);
+    let best = null, bestDist = Infinity;
+    for (const p of line.points) {
+      const d = Math.abs(new Date(p.date).getTime() - tt);
+      if (d < bestDist) { bestDist = d; best = p.value; }
+    }
+    return best;
+  };
+
+  const tip = getChartTooltipEl();
+
+  const updateCrosshairGeometry = () => {
+    const cfg = canvas._mfCrosshairConfig;
+    const H = canvas._mfExpanded ? cfg.expandedH : cfg.defaultH;
+    crosshair.style.top = cfg.pad.top + 'px';
+    crosshair.style.height = (H - cfg.pad.top - cfg.pad.bottom) + 'px';
+  };
+
+  const onEnter = () => {
+    if (canvas._mfExpanded) return;
+    canvas._mfExpanded = true;
+    config.redrawFn();
+  };
+
+  const onLeave = () => {
+    crosshair.style.display = 'none';
+    tip.style.display = 'none';
+    canvas.style.cursor = '';
+    if (!canvas._mfExpanded) return;
+    canvas._mfExpanded = false;
+    config.redrawFn();
+  };
+
+  const onMove = (e) => {
+    const cfg = canvas._mfCrosshairConfig;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const pad = cfg.pad;
+    const H = canvas._mfExpanded ? cfg.expandedH : cfg.defaultH;
+    const W = canvas.offsetWidth;
+    const cw = W - pad.left - pad.right;
+    const ch = H - pad.top - pad.bottom;
+
+    if (mx < pad.left - 4 || mx > pad.left + cw + 4 || my < pad.top - 4 || my > pad.top + ch + 4) {
+      crosshair.style.display = 'none';
+      tip.style.display = 'none';
+      canvas.style.cursor = '';
+      return;
+    }
+
+    const n = cfg.allDates.length;
+    const ratio = Math.max(0, Math.min(1, (mx - pad.left) / cw));
+    const idx = Math.max(0, Math.min(n - 1, Math.round(ratio * (n - 1))));
+    const date = cfg.allDates[idx];
+    if (!date) return;
+
+    const x = pad.left + (idx / Math.max(1, n - 1)) * cw;
+    crosshair.style.display = 'block';
+    crosshair.style.left = x + 'px';
+    updateCrosshairGeometry();
+
+    // Check proximity to a cash-flow marker
+    let cfInfo = null;
+    if (cfg.markers && cfg.markers.length) {
+      const canvasX = x; // pixel x in CSS coords
+      let bestM = null, bestDist = 14;
+      for (const m of cfg.markers) {
+        const d = Math.abs(m.x - canvasX);
+        if (d < bestDist) { bestDist = d; bestM = m; }
+      }
+      if (bestM) {
+        const verb = bestM.amount >= 0 ? 'Deposit' : 'Withdrawal';
+        cfInfo = `${verb}: ${bestM.amount >= 0 ? '+' : ''}${fmt$(bestM.amount)}`;
+      }
+    }
+
+    // Build tooltip HTML
+    let html = `<div style="font-size:22px;color:#94a3b8;margin-bottom:6px;font-weight:600">${escHtml(fmtDateShort(date))}</div>`;
+
+    // Pre-compute best-performer value at this date for pct-of-best annotation
+    let bestVal = null;
+    if (cfg.showPctOfBest) {
+      for (const l of cfg.lines) {
+        const v = nearestValue(l, date);
+        if (v != null && (bestVal === null || v > bestVal)) bestVal = v;
+      }
+    }
+
+    for (let i = 0; i < cfg.lines.length; i++) {
+      const l = cfg.lines[i];
+      const val = nearestValue(l, date);
+      const valStr = val != null ? cfg.formatValue(val) : '—';
+      let pctStr = '';
+      if (cfg.showPctOfBest && val != null && bestVal != null && bestVal > 0) {
+        const pct = (val / bestVal) * 100;
+        pctStr = ` <span style="color:#64748b;font-size:20px;font-weight:400">(${pct.toFixed(1)}%)</span>`;
+      }
+      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:24px">
+        <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${l.color};flex-shrink:0"></span>
+        <span style="color:#94a3b8;flex:1">${escHtml(l.label)}</span>
+        <span style="color:${l.color};font-weight:600;padding-left:14px">${escHtml(valStr)}${pctStr}</span>
+      </div>`;
+    }
+    if (cfInfo) {
+      html += `<div style="margin-top:5px;padding-top:5px;border-top:1px solid #1e293b;font-size:22px;color:#60a5fa">${escHtml(cfInfo)}</div>`;
+    }
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+
+    // Reposition tip to stay within viewport
+    const tipW = 220;
+    const left = e.clientX + 16 + tipW > window.innerWidth ? e.clientX - tipW - 8 : e.clientX + 16;
+    tip.style.left = left + 'px';
+    tip.style.top = (e.clientY - 10) + 'px';
+    canvas.style.cursor = 'crosshair';
+  };
+
+  canvas.addEventListener('mouseenter', onEnter);
+  canvas.addEventListener('mouseleave', onLeave);
+  canvas.addEventListener('mousemove', onMove);
+
+  canvas._mfCrosshairCleanup = () => {
+    canvas.removeEventListener('mouseenter', onEnter);
+    canvas.removeEventListener('mouseleave', onLeave);
+    canvas.removeEventListener('mousemove', onMove);
+    crosshair.style.display = 'none';
+    tip.style.display = 'none';
+    canvas.style.cursor = '';
+  };
 }
 
 // Attach (or replace) a hover tooltip on a canvas that shows the deposit/
@@ -3769,21 +4017,24 @@ function drawOverviewChart() {
   const stats = getOverviewChartStats(series, txns);
   renderVotStats(stats);
 
+  const DEFAULT_H = 220, EXPANDED_H = 350;
+  const H = canvas._mfExpanded ? EXPANDED_H : DEFAULT_H;
+
   if (series.length < 2) {
-    setupCanvas(canvas, 220);
+    setupCanvas(canvas, H);
     const ctx = canvas.getContext('2d');
     const W = canvas.offsetWidth || 600;
-    drawChartBackground(ctx, W, 220);
+    drawChartBackground(ctx, W, H);
     ctx.fillStyle = '#475569';
     ctx.font = '13px system-ui';
     ctx.textAlign = 'center';
-    ctx.fillText('Waiting for LPL Value Over Time data to load…', W / 2, 110);
+    ctx.fillText('Waiting for LPL Value Over Time data to load…', W / 2, H / 2);
     return;
   }
 
-  setupCanvas(canvas, 220);
+  setupCanvas(canvas, H);
   const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth, H = 220;
+  const W = canvas.offsetWidth;
   const pad = { top: 20, right: 20, bottom: 44, left: 70 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
@@ -3874,8 +4125,6 @@ function drawOverviewChart() {
       usedX.get(x).amount += cf.amount;
     }
   }
-  attachChartTooltip(canvas, [...usedX.values()]);
-
   // Legend (top right of chart area)
   const items = [
     { color: '#60a5fa', dash: false, label: 'Value' },
@@ -3901,6 +4150,22 @@ function drawOverviewChart() {
     ctx.setLineDash([]);
     lx -= 10;
   }
+
+  const cfMarkers = [...usedX.values()];
+  const allDates = series.map(d => d.date);
+  attachChartCrosshair(canvas, {
+    lines: [
+      { label: 'Portfolio Value', color: '#60a5fa', points: series.map(d => ({ date: d.date, value: d.value })) },
+      { label: 'Invested', color: '#f97316', points: series.map((d, i) => ({ date: d.date, value: investedLine[i] })) },
+    ],
+    allDates,
+    pad,
+    defaultH: DEFAULT_H,
+    expandedH: EXPANDED_H,
+    redrawFn: drawOverviewChart,
+    formatValue: fmt$,
+    markers: cfMarkers,
+  });
 }
 
 function fmtAxisDollar(n) {
