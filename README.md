@@ -55,7 +55,7 @@ See [Privacy Policy § 2](legal/PRIVACY.md) for the complete itemized list.
 
 ### From the Chrome Web Store (Recommended)
 
-1. Open the [MyFolio listing on the Chrome Web Store](https://chrome.google.com/webstore/detail/myfolio) and click **Add to Chrome**
+1. Open the [MyFolio listing on the Chrome Web Store](https://chromewebstore.google.com/detail/myfolio/nadgcomlmnbjmehjgkjafjkecfeefaoa) and click **Add to Chrome**
 2. Pin the extension via the puzzle-piece icon in your toolbar
 3. Open your account at `https://accountview.lpl.com/` and click **◆ MyFolio View** at the bottom-right
 
