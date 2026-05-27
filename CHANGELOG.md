@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.1] — 2026-05-27
+
+### Changed
+- Extension icons replaced with a Dow Jones-style upward-trending line chart in company purple.
+
+---
+
 ## [1.6.0] — 2026-05-16
 
 ### Added
