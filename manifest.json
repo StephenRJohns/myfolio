@@ -4,7 +4,7 @@
   "version": "1.6.2",
   "description": "A cleaner, modern dashboard overlay for LPL AccountView. Personal-use tool — no personal data ever leaves your browser.",
   "homepage_url": "https://github.com/StephenRJohns/myfolio",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://accountview.lpl.com/*",
     "https://stooq.com/*",
