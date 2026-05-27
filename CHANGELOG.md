@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.3] — 2026-05-27
+
+### Fixed
+- **Daily-value spike from rollover settlement.** LPL occasionally returns the same date twice in an account's value-over-time series, and briefly shows a rollover in two accounts mid-settlement before reversing it. Both produced a phantom spike (one day showing ~$1.17M against a ~$986k real total). Per-account series are now deduplicated by date, and the aggregate is de-spiked: any day exceeding 2× both neighbors is clamped to the higher neighbor (sustained deposit steps are preserved).
+- **Growth of $10,000 chart distorted by deposits.** The daily TWR reconstruction tried to strip deposits by matching cash-flow transactions to the exact day the value stepped. Settlement lag means those rarely align, so large deposits leaked in as +180% "gains" and smaller ones as spurious losses. The chart now neutralizes any day that carries a known cash flow or an implausibly large raw move (>15%), compounding only clean market days. The line now tracks benchmarks instead of leaping or dropping at deposits.
+
+### Added
+- **Deposit / withdrawal markers** on the Portfolio Value Over Time and Growth of $10,000 charts — green up-triangles for deposits, red down-triangles for withdrawals, with a dashed guide line. Hovering any marker (including the Overview chart's existing markers) shows a tooltip with the date and dollar amount.
+- **Debug log search.** A search box filters log entries live (matching message or detail) with highlighting and a match count. A "Copy matches + API calls" button copies matching entries plus any log entries that share their URL, so a parsed value and the raw API call behind it travel together.
+
+---
+
 ## [1.6.2] — 2026-05-27
 
 ### Fixed

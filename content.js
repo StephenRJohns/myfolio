@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.2';
+const MF_VERSION = 'v1.6.3';
 
 const state = {
   accounts: [],
@@ -35,6 +35,7 @@ const state = {
   sessionRecorded: false,
   transactionCacheSavedAt: null,       // timestamp of last successful transaction cache write/restore
   activityStaleDialogDismissed: false, // true once user dismisses the stale-data dialog this session
+  debugSearch: '',                     // current Debug-tab search filter
   logs: [],
 };
 
@@ -551,16 +552,21 @@ function parseApiResponse(url, data) {
         if (cdKeys.length && !dvArray.length) {
           dbg('info', `account-vot chartData keys for ${acctId} (no dailyValues found)`, { keys: cdKeys, sample: JSON.stringify(cd).slice(0, 300) });
         }
-        const acctSeries = [];
+        // Dedupe by date within this account. LPL occasionally returns the
+        // same date twice during rollover settlement; summing both rows would
+        // double-count and inflate that day (last occurrence wins).
+        const acctMap = new Map();
         for (const dv of dvArray) {
           const d = dv.date || dv.asOfDate || dv.Date || dv.dt || dv.d || dv.tradingDate;
           const v = toNum(dv.endValue ?? dv.value ?? dv.portfolioValue ?? dv.Value ??
                           dv.EndValue ?? dv.totalValue ?? dv.marketValue ?? dv.balance ??
                           dv.close ?? dv.v ?? dv.amount);
-          if (d && v != null && v > 0) {
-            byDate[d] = (byDate[d] || 0) + v;
-            acctSeries.push({ date: d, value: v });
-          }
+          if (d && v != null && v > 0) acctMap.set(d, v);
+        }
+        const acctSeries = [];
+        for (const [d, v] of acctMap) {
+          byDate[d] = (byDate[d] || 0) + v;
+          acctSeries.push({ date: d, value: v });
         }
         acctDiag.push({ id: acctId, name: acct.accountName || acct.nickName || '', days: acctSeries.length, ytd: cd.PeriodTotalReturn });
         if (acctId && acctSeries.length) {
@@ -588,7 +594,7 @@ function parseApiResponse(url, data) {
 
       const sorted = Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
       if (sorted.length) {
-        state.dailyValues = sorted.map(([date, value]) => ({ date, value }));
+        state.dailyValues = despikeSeries(sorted.map(([date, value]) => ({ date, value })));
         dbg('ok', `account-vot: ${sorted.length} daily values across ${Object.keys(perAcct).length} accounts`, { latest: sorted[sorted.length - 1], perAccount: acctDiag });
         // Drop any rows dated past today (defensive: prevents future-dated
         // placeholders from pulling the chart down at the right edge)
@@ -804,13 +810,30 @@ function synthesizeMissingAccountDailies() {
       aggMap.set(d.date, (aggMap.get(d.date) || 0) + d.value);
     }
   }
-  state.dailyValues = Array.from(aggMap.entries())
+  state.dailyValues = despikeSeries(Array.from(aggMap.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([date, value]) => ({ date, value }));
+    .map(([date, value]) => ({ date, value })));
 
   if (reconstructed || state.flatLinedAccounts.length) {
     dbg('ok', `Aggregate rebuilt: ${reconstructed} reconstructed, ${state.flatLinedAccounts.length} flat-lined, ${state.dailyValues.length} aggregated dates`);
   }
+}
+
+// Remove single-day spikes from a sorted [{date,value}] series. A value far
+// above BOTH its neighbors is a transient data glitch (LPL briefly shows a
+// rollover in two accounts mid-settlement, then reverses it) — not a real
+// gain, since legitimate deposits step up and STAY up. Replace the spike with
+// the higher neighbor so sustained steps (real deposits) are preserved.
+function despikeSeries(series, factor = 2) {
+  if (!series || series.length < 3) return series;
+  const out = series.map(d => ({ ...d }));
+  for (let i = 1; i < out.length - 1; i++) {
+    const prev = out[i - 1].value;   // already-corrected, so consecutive spikes smooth left-to-right
+    const next = out[i + 1].value;
+    const hi = Math.max(prev, next);
+    if (hi > 0 && out[i].value > hi * factor) out[i].value = hi;
+  }
+  return out;
 }
 
 // Drop any daily-value entries dated after today. Brokerages occasionally
@@ -2755,6 +2778,10 @@ function drawPortfolioValueChart() {
   ctx.stroke();
 
   drawXAxisDates(ctx, vals.map(v => v.date), xOf, H);
+
+  const events = cashFlowEventsByDay(filteredTransactions());
+  const markers = drawCashFlowMarkers(ctx, vals.map(v => v.date), xOf, pad, ch, events);
+  attachChartTooltip(canvas, markers);
 }
 
 // Build a cash-flow-adjusted growth series starting at startAmount.
@@ -2774,6 +2801,9 @@ function buildTwrSeries(dailyValues, transactions, startAmount = 10000) {
     const k = dayOf(td);
     cfByDay[k] = (cfByDay[k] || 0) + cashFlowImpact(t);
   }
+  // A diversified portfolio's daily INVESTMENT return can't plausibly exceed
+  // this. A larger move is funding (a deposit/withdrawal), not performance.
+  const MAX_DAILY_RETURN = 0.15;
   const result = [{ date: dailyValues[0].date, close: startAmount }];
   let current = startAmount;
   for (let i = 1; i < dailyValues.length; i++) {
@@ -2782,7 +2812,17 @@ function buildTwrSeries(dailyValues, transactions, startAmount = 10000) {
     const dvDate = parseDateLoose(dailyValues[i].date);
     const cf = (dvDate ? cfByDay[dayOf(dvDate)] : 0) || 0;
     if (bv > 0) {
-      current = Math.max(0, current * (1 + (ev - bv - cf) / bv));
+      const raw = (ev - bv) / bv;
+      // A "funding day" carries a known external cash flow OR a raw move too
+      // large to be market performance (a deposit/withdrawal that stepped the
+      // value). We neutralize funding days entirely rather than subtracting the
+      // cash flow: transaction dates rarely line up with the value step
+      // (settlement lag, multi-day splits), so subtracting a mismatched cf
+      // leaves a spurious gain or loss. Zeroing the day loses only that day's
+      // (small) real market move — negligible across a handful of deposits.
+      const fundingDay = Math.abs(cf) >= 0.01 || Math.abs(raw) > MAX_DAILY_RETURN;
+      const r = fundingDay ? 0 : raw;
+      current = Math.max(0, current * (1 + r));
     }
     result.push({ date: dailyValues[i].date, close: current });
   }
@@ -2895,6 +2935,10 @@ function drawGrowthChart() {
 
   drawXAxisDates(ctx, allDates, (date) => xOf(date), H, true);
 
+  const cfEvents = cashFlowEventsByDay(filteredTransactions());
+  const growthMarkers = drawCashFlowMarkers(ctx, allDates, (i) => xOf(allDates[i]), pad, ch, cfEvents);
+  attachChartTooltip(canvas, growthMarkers);
+
   // Legend (right side). Each entry occupies a full row containing the
   // colour chip, the label, and the final $ value on a second line — needs
   // ~34px per row so the two text lines don't overlap.
@@ -2965,12 +3009,127 @@ function fmtDateShort(d) {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// ── Cash-flow markers (shared across all time-series charts) ──────────────────
+
+// Aggregate net external cash flow per calendar day from the given transactions.
+function cashFlowEventsByDay(transactions) {
+  const dayKey = (dt) => `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+  const map = new Map();
+  for (const t of transactions || []) {
+    if (!isCashFlow(t)) continue;
+    const td = parseDateLoose(t.date);
+    if (!td) continue;
+    const impact = cashFlowImpact(t);
+    if (Math.abs(impact) < 0.01) continue;
+    const d0 = new Date(td.getFullYear(), td.getMonth(), td.getDate());
+    const k = dayKey(d0);
+    const cur = map.get(k) || { date: d0, amount: 0 };
+    cur.amount += impact;
+    map.set(k, cur);
+  }
+  return [...map.values()].filter(e => Math.abs(e.amount) >= 0.01).sort((a, b) => a.date - b.date);
+}
+
+// Draw vertical deposit/withdrawal markers onto a chart. seriesDates is the
+// chart's ordered date list; xOfIndex(i) returns the pixel x for series index i.
+// Returns [{x, amount, date}] hit-regions for tooltip hover.
+function drawCashFlowMarkers(ctx, seriesDates, xOfIndex, pad, ch, events) {
+  const markers = [];
+  if (!events || !events.length || !seriesDates.length) return markers;
+  const parsed = seriesDates.map(ds => parseDateLoose(ds));
+  for (const ev of events) {
+    // Match to the first series date on or after the event day; fall back to last.
+    let idx = parsed.findIndex(dt => dt && dt >= ev.date);
+    if (idx < 0) idx = parsed.length - 1;
+    const x = xOfIndex(idx);
+    const isDeposit = ev.amount >= 0;
+    const color = isDeposit ? '#34d399' : '#f87171';
+    const top = pad.top, bot = pad.top + ch;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.45;
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    // Triangle at the baseline: up = deposit, down = withdrawal
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    if (isDeposit) { ctx.moveTo(x, bot - 8); ctx.lineTo(x - 5, bot); ctx.lineTo(x + 5, bot); }
+    else { ctx.moveTo(x, bot); ctx.lineTo(x - 5, bot - 8); ctx.lineTo(x + 5, bot - 8); }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    markers.push({ x, amount: ev.amount, date: ev.date });
+  }
+  return markers;
+}
+
+function getChartTooltipEl() {
+  let tip = document.getElementById('mf-chart-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'mf-chart-tip';
+    tip.className = 'mf-chart-tip';
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+
+// Attach (or replace) a hover tooltip on a canvas that shows the deposit/
+// withdrawal value when the cursor is near a marker.
+function attachChartTooltip(canvas, markers) {
+  if (!canvas) return;
+  if (canvas._mfTipCleanup) canvas._mfTipCleanup();
+  if (!markers || !markers.length) return;
+
+  const tip = getChartTooltipEl();
+  const onMove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    let nearest = null, best = 9;
+    for (const m of markers) {
+      const d = Math.abs(m.x - mx);
+      if (d < best) { best = d; nearest = m; }
+    }
+    if (nearest) {
+      const verb = nearest.amount >= 0 ? 'Deposit' : 'Withdrawal';
+      tip.innerHTML = `<strong>${verb}</strong><br>${escHtml(fmtDateShort(nearest.date))} · ${nearest.amount >= 0 ? '+' : ''}${escHtml(fmt$(nearest.amount))}`;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+      canvas.style.cursor = 'pointer';
+    } else {
+      tip.style.display = 'none';
+      canvas.style.cursor = '';
+    }
+  };
+  const onLeave = () => { tip.style.display = 'none'; canvas.style.cursor = ''; };
+  canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('mouseleave', onLeave);
+  canvas._mfTipCleanup = () => {
+    canvas.removeEventListener('mousemove', onMove);
+    canvas.removeEventListener('mouseleave', onLeave);
+    tip.style.display = 'none';
+  };
+}
+
 // ── Debug tab ────────────────────────────────────────────────────────────────
 function renderDebugTab() {
   const body = document.getElementById('mf-body');
   if (!body) return;
 
   const levelIcon = { info: '●', ok: '✔', warn: '▲', err: '✖' };
+  const q = (state.debugSearch || '').trim().toLowerCase();
+  const matchesQuery = (e) => !q || e.msg.toLowerCase().includes(q) || (e.detail && e.detail.toLowerCase().includes(q));
+  const shown = state.logs.filter(matchesQuery);
+
+  // Preserve search-input focus and caret across the full re-render (new log
+  // entries re-render the whole tab, which would otherwise drop focus).
+  const prevInput = document.getElementById('mf-debug-search');
+  const hadFocus = prevInput && document.activeElement === prevInput;
+  const selStart = prevInput ? prevInput.selectionStart : null;
+  const selEnd = prevInput ? prevInput.selectionEnd : null;
 
   body.innerHTML = `
     <div class="mf-section mf-debug-section">
@@ -2986,15 +3145,22 @@ function renderDebugTab() {
         <button class="mf-reload-btn" id="mf-copy-log">⎘ Copy debug log</button>
         <button class="mf-reload-btn" id="mf-clear-log">✕ Clear</button>
       </div>
+      <div class="mf-debug-searchbar">
+        <input type="text" id="mf-debug-search" class="mf-debug-search-input" placeholder="Search messages and details…" value="${escHtml(state.debugSearch || '')}" autocomplete="off" spellcheck="false">
+        ${q ? `<span class="mf-debug-search-count">${shown.length} of ${state.logs.length}</span>
+        <button class="mf-reload-btn" id="mf-copy-matches" title="Copy matching entries plus any API-call entries sharing their URL">⎘ Copy matches + API calls</button>` : ''}
+      </div>
       <div class="mf-debug-log" id="mf-debug-log">
-        ${state.logs.length === 0
-          ? '<div class="mf-debug-empty">No log entries yet. API calls will appear here as they are intercepted.</div>'
-          : state.logs.map(e => `
+        ${shown.length === 0
+          ? (q
+              ? `<div class="mf-debug-empty">No entries match “${escHtml(state.debugSearch)}”.</div>`
+              : '<div class="mf-debug-empty">No log entries yet. API calls will appear here as they are intercepted.</div>')
+          : shown.map(e => `
             <div class="mf-debug-entry mf-dbg-${e.level}">
               <span class="mf-dbg-time">${e.t}</span>
               <span class="mf-dbg-icon">${levelIcon[e.level] || '●'}</span>
-              <span class="mf-dbg-msg">${escHtml(e.msg)}</span>
-              ${e.detail ? `<pre class="mf-dbg-detail">${escHtml(e.detail)}</pre>` : ''}
+              <span class="mf-dbg-msg">${highlightMatch(e.msg, q)}</span>
+              ${e.detail ? `<pre class="mf-dbg-detail">${highlightMatch(e.detail, q)}</pre>` : ''}
             </div>
           `).join('')}
       </div>
@@ -3013,6 +3179,90 @@ function renderDebugTab() {
       if (btn) { btn.textContent = '✔ Copied!'; setTimeout(() => { btn.textContent = '⎘ Copy debug log'; }, 2000); }
     });
   });
+
+  const searchInput = document.getElementById('mf-debug-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      state.debugSearch = searchInput.value;
+      renderDebugTab();
+    });
+    if (hadFocus) {
+      searchInput.focus();
+      try { searchInput.setSelectionRange(selStart, selEnd); } catch (e) {}
+    }
+  }
+
+  document.getElementById('mf-copy-matches')?.addEventListener('click', () => {
+    const text = buildSearchCopyPayload(state.debugSearch);
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('mf-copy-matches');
+      if (btn) { btn.textContent = '✔ Copied!'; setTimeout(() => { btn.textContent = '⎘ Copy matches + API calls'; }, 2000); }
+    });
+  });
+}
+
+// Escape text, then wrap occurrences of the (case-insensitive) query in a mark.
+function highlightMatch(text, q) {
+  const esc = escHtml(text);
+  if (!q) return esc;
+  try {
+    const re = new RegExp(escHtml(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    return esc.replace(re, m => `<mark class="mf-dbg-hl">${m}</mark>`);
+  } catch (e) { return esc; }
+}
+
+// Build a copy payload of entries matching the query, plus any log entries
+// that share a URL with a match (the "associated API calls" — network status,
+// JSON-body-parsed, and any data-parse entries for the same endpoint).
+function buildSearchCopyPayload(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return buildCopyPayload();
+
+  const urlRe = /(https?:\/\/[^\s"'`\\]+|\/\/[^\s"'`\\]+)/g;
+  const matches = state.logs.filter(e =>
+    e.msg.toLowerCase().includes(q) || (e.detail && e.detail.toLowerCase().includes(q))
+  );
+
+  // URLs referenced by any matching entry
+  const urls = new Set();
+  for (const e of matches) {
+    const text = `${e.msg}\n${e.detail || ''}`;
+    let m;
+    while ((m = urlRe.exec(text)) !== null) urls.add(m[1]);
+  }
+
+  // Associated entries: any log entry referencing one of those URLs
+  const urlList = [...urls];
+  const isAssociated = (e) => {
+    if (!urlList.length) return false;
+    const text = `${e.msg}\n${e.detail || ''}`;
+    return urlList.some(u => text.includes(u));
+  };
+
+  const seen = new Set();
+  const all = state.logs
+    .filter(e => matches.includes(e) || isAssociated(e))
+    .filter(e => { if (seen.has(e)) return false; seen.add(e); return true; });
+  // state.logs is already newest-first; preserve that order.
+
+  const lines = [];
+  lines.push(`=== MyFolio Debug — search "${query}" ===`);
+  lines.push(`${matches.length} matching entr${matches.length === 1 ? 'y' : 'ies'}, ${all.length} including associated API calls`);
+  lines.push(`Page URL: ${location.href}`);
+  lines.push(`Time: ${new Date().toISOString()}`);
+  if (urlList.length) {
+    lines.push('');
+    lines.push(`Associated endpoints:`);
+    urlList.forEach(u => lines.push(`  - ${u}`));
+  }
+  lines.push('');
+  lines.push('=== Entries (newest first) ===');
+  for (const e of all) {
+    lines.push(`[${e.t}][${e.level}] ${e.msg}`);
+    if (e.detail) lines.push(e.detail);
+    lines.push('');
+  }
+  return lines.join('\n');
 }
 
 function buildCopyPayload() {
@@ -3396,8 +3646,8 @@ function drawOverviewChart() {
   // X-axis date labels (above cash-flow marker zone)
   drawXAxisDates(ctx, series.map(d => d.date), xOf, H - 22);
 
-  // Cash flow $ markers — deduplicate by x pixel
-  const usedX = new Set();
+  // Cash flow $ markers — deduplicate by x pixel, accumulating amount per x
+  const usedX = new Map();
   for (const cf of cfSorted) {
     let bestIdx = -1, bestDelta = Infinity;
     for (let i = 0; i < series.length; i++) {
@@ -3408,21 +3658,25 @@ function drawOverviewChart() {
     }
     if (bestIdx < 0 || bestDelta > 5 * 86400000) continue;
     const x = Math.round(xOf(bestIdx));
-    if (usedX.has(x)) continue;
-    usedX.add(x);
     const markerY = H - 10;
-    ctx.beginPath();
-    ctx.arc(x, markerY, 8, 0, 2 * Math.PI);
-    ctx.fillStyle = '#1e3a5f';
-    ctx.fill();
-    ctx.strokeStyle = '#60a5fa';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.fillStyle = '#93c5fd';
-    ctx.font = 'bold 9px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText('$', x, markerY + 3);
+    if (!usedX.has(x)) {
+      ctx.beginPath();
+      ctx.arc(x, markerY, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = '#1e3a5f';
+      ctx.fill();
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#93c5fd';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('$', x, markerY + 3);
+      usedX.set(x, { x, amount: cf.amount, date: cf.dt });
+    } else {
+      usedX.get(x).amount += cf.amount;
+    }
   }
+  attachChartTooltip(canvas, [...usedX.values()]);
 
   // Legend (top right of chart area)
   const items = [
