@@ -33,6 +33,8 @@ const state = {
   loadStart: null,
   avgLoadMs: null,
   sessionRecorded: false,
+  transactionCacheSavedAt: null,       // timestamp of last successful transaction cache write/restore
+  activityStaleDialogDismissed: false, // true once user dismisses the stale-data dialog this session
   logs: [],
 };
 
@@ -105,7 +107,8 @@ function safeStorageRemove(keys) {
 }
 
 // Load persisted data from storage on startup
-const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const DAILY_VALUES_TTL = 24 * 60 * 60 * 1000;        // 24 hours (market data)
+const TRANSACTION_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days (historical records)
 const CACHE_SCHEMA_VERSION = 4;  // bump to invalidate older cached series
 safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'cachedLplProvidedIds', 'cachedTransactions', 'cacheSchemaVersion'], (result) => {
   const times = result.loadTimes || [];
@@ -144,8 +147,9 @@ safeStorageGet(['loadTimes', 'cachedDailyValues', 'cachedAccountDailyValues', 'c
   // to /web/activity, we cache it so the chart's synthesis has it on every
   // future load without the user having to revisit Activity each time.
   const tx = result.cachedTransactions;
-  if (tx && Array.isArray(tx.data) && tx.data.length && (Date.now() - (tx.savedAt || 0)) < DAILY_VALUES_TTL) {
+  if (tx && Array.isArray(tx.data) && tx.data.length && (Date.now() - (tx.savedAt || 0)) < TRANSACTION_CACHE_TTL) {
     state.transactions = tx.data;
+    state.transactionCacheSavedAt = tx.savedAt || null;
     dbg('info', `Restored ${tx.data.length} transactions from cache (saved ${new Date(tx.savedAt).toLocaleTimeString()})`);
   }
   // If daily-value cache + transactions are both restored, re-synthesize
@@ -430,7 +434,8 @@ function parseApiResponse(url, data) {
       // Persist transactions so they survive page reloads — the
       // /activity-process endpoint is a cross-origin POST that fails when
       // we try to replay it proactively, so we have to keep what we caught.
-      safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: Date.now() } });
+      state.transactionCacheSavedAt = Date.now();
+      safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: state.transactionCacheSavedAt } });
       // Re-synthesize accounts now that we may have the missing cash flows
       if (state.dailyValues.length) synthesizeMissingAccountDailies();
       refreshOverlay();
@@ -444,14 +449,24 @@ function parseApiResponse(url, data) {
   if (u.includes('intraday')) {
     // Portfolio totals from accountIntraDay.clientData
     const aid = data?.accountIntraDay?.clientData;
-    if (aid?.portfolioBalance != null && !state.accounts.length) {
-      state.accounts = [{
-        id: 'portfolio', name: 'Total Portfolio', type: '',
-        value: toNum(aid.portfolioBalance),
-        change: toNum(aid.dayChange),
-        changePct: toNum(aid.dayChangePercentage),
-        ytdReturn: null, unrealizedGL: null,
-      }];
+    if (aid?.portfolioBalance != null) {
+      if (!state.accounts.length) {
+        state.accounts = [{
+          id: 'portfolio', name: 'Total Portfolio', type: '',
+          value: toNum(aid.portfolioBalance),
+          change: toNum(aid.dayChange),
+          changePct: toNum(aid.dayChangePercentage),
+          ytdReturn: null, unrealizedGL: null,
+        }];
+      } else {
+        // AccountInfo can return wrong dayChange for recently-opened/rollover
+        // accounts. Intraday is always authoritative for day change — overwrite.
+        const portfolio = state.accounts.find(a => a.id === 'portfolio');
+        if (portfolio) {
+          portfolio.change = toNum(aid.dayChange);
+          portfolio.changePct = toNum(aid.dayChangePercentage);
+        }
+      }
       dbg('ok', `Intraday accountIntraDay: portfolio $${aid.portfolioBalance}`, { dayChange: aid.dayChange });
       refreshOverlay();
     }
@@ -495,7 +510,8 @@ function parseApiResponse(url, data) {
         state.transactions = Array.from(existing.values());
         dbg('ok', `Intraday activityIntraDay: parsed ${all.length}, added ${added} new (total ${state.transactions.length})`, all[0]);
         // Persist so the cache stays in sync with the merged set
-        safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: Date.now() } });
+        state.transactionCacheSavedAt = Date.now();
+        safeStorageSet({ cachedTransactions: { data: state.transactions, savedAt: state.transactionCacheSavedAt } });
         // If account-vot already ran, re-synthesize so newly-arrived cash flows
         // are factored into accounts that don't have native daily history.
         if (state.dailyValues.length) synthesizeMissingAccountDailies();
@@ -1095,7 +1111,7 @@ function buildOverlay() {
       }
 
       // Activity tab — load/refresh buttons
-      if (e.target.closest('#mf-load-activity-btn') || e.target.closest('#mf-reload-activity-btn') || e.target.closest('#mf-flatline-activity-btn')) {
+      if (e.target.closest('#mf-load-activity-btn') || e.target.closest('#mf-reload-activity-btn') || e.target.closest('#mf-flatline-activity-btn') || e.target.closest('#mf-stale-activity-btn')) {
         openActivityPage();
         return;
       }
@@ -1805,6 +1821,49 @@ function renderBreadcrumb() {
   return `<div class="mf-breadcrumb">${chips.join('')}</div>`;
 }
 
+// ── Stale activity data dialog ───────────────────────────────────────────────
+function maybeShowStaleActivityDialog() {
+  const overlay = document.getElementById('mf-overlay');
+  if (!overlay) return;
+  // Remove any existing dialog first (tab switch, re-render, etc.)
+  const existing = document.getElementById('mf-stale-dialog');
+  if (existing) existing.remove();
+
+  const cacheAgeMs = state.transactionCacheSavedAt ? Date.now() - state.transactionCacheSavedAt : null;
+  const isStale = cacheAgeMs !== null && cacheAgeMs > DAILY_VALUES_TTL;
+  if (!isStale || !state.transactions.length || state.activityStaleDialogDismissed) return;
+
+  const hrs = Math.round(cacheAgeMs / 3600000);
+  const ageLabel = hrs < 48 ? `${hrs} hour${hrs !== 1 ? 's' : ''}` : `${Math.round(hrs / 24)} days`;
+
+  const dialog = document.createElement('div');
+  dialog.id = 'mf-stale-dialog';
+  dialog.className = 'mf-stale-dialog';
+  dialog.innerHTML = `
+    <div class="mf-stale-dialog-card">
+      <div class="mf-stale-dialog-icon">⚠</div>
+      <h3 class="mf-stale-dialog-title">Activity Data Is Stale</h3>
+      <p class="mf-stale-dialog-msg">Cached transaction data is <strong>${escHtml(ageLabel)} old</strong>. The Growth of $10,000 chart strips contributions using this data — stale records may cause the chart to look skewed.</p>
+      <p class="mf-stale-dialog-msg" style="margin-top:8px">Click below to open the LPL Activity page. MyFolio captures the latest cash flows automatically and closes the tab.</p>
+      <div class="mf-stale-dialog-btns">
+        <button class="mf-btn-primary" id="mf-stale-dialog-load">↺ Load Activity Data</button>
+        <button class="mf-btn-secondary" id="mf-stale-dialog-dismiss">Dismiss</button>
+      </div>
+    </div>`;
+
+  dialog.querySelector('#mf-stale-dialog-load').addEventListener('click', () => {
+    state.activityStaleDialogDismissed = true;
+    dialog.remove();
+    openActivityPage();
+  });
+  dialog.querySelector('#mf-stale-dialog-dismiss').addEventListener('click', () => {
+    state.activityStaleDialogDismissed = true;
+    dialog.remove();
+  });
+
+  overlay.appendChild(dialog);
+}
+
 // ── Tab renderers ────────────────────────────────────────────────────────────
 function renderContent() {
   const body = document.getElementById('mf-body');
@@ -1814,6 +1873,7 @@ function renderContent() {
     body.innerHTML = renderOverview();
     renderAllocationChart();
     initOverviewChart();
+    maybeShowStaleActivityDialog();
     return;
   }
   if (tab === 'holdings') { body.innerHTML = renderHoldings(); renderAllocationChart(); return; }
@@ -2480,10 +2540,19 @@ function renderActivity() {
       </div>`;
   }).join('');
 
+  // Show a notice when cached data is > 24h old so user knows to refresh.
+  const cacheAgeMs = state.transactionCacheSavedAt ? Date.now() - state.transactionCacheSavedAt : null;
+  const staleBanner = (hasHistory && cacheAgeMs !== null && cacheAgeMs > DAILY_VALUES_TTL) ? (() => {
+    const hrs = Math.round(cacheAgeMs / 3600000);
+    const label = hrs < 48 ? `${hrs} hour${hrs !== 1 ? 's' : ''}` : `${Math.round(hrs / 24)} days`;
+    return `<div class="mf-warn-banner">Activity data is ${label} old — <button class="mf-btn-inline" id="mf-stale-activity-btn">↺ Refresh</button> to capture any new cash flows.</div>`;
+  })() : '';
+
   return `
     <div class="mf-section">
       ${renderBreadcrumb()}
       ${summaryBar}
+      ${staleBanner}
       ${noDataBanner}
       ${hasHistory && allCashFlows.length === 0 ? '<p class="mf-note">No cash-flow transactions for this filter.</p>' : ''}
       ${rowsHtml}

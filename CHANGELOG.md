@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.2] — 2026-05-27
+
+### Fixed
+- **Portfolio day change was wrong after large rollovers.** The `AccountInfo` endpoint returns an incorrect `dayChange` for recently-funded/rollover accounts (e.g. showing −$253k instead of the true +$1,106). The intraday endpoint always carries the correct figure but was previously ignored when `AccountInfo` had already populated the portfolio entry. The intraday handler now always overwrites the portfolio-level `change` / `changePct` fields, regardless of arrival order.
+- **Activity transaction cache expired after 24 hours**, same TTL as market data. Because the `/activity-process` endpoint is a cross-origin POST that cannot be replayed proactively from the extension context (CORS preflight fails), once the 24-hour cache expired the Growth of $10,000 chart would stop stripping contributions. Transaction history is permanent and doesn't change, so the TTL is now 7 days.
+
+### Added
+- **Stale activity data dialog.** When cached transactions are more than 24 hours old, the Overview tab now shows a modal dialog explaining the issue and offering a one-click "Load Activity Data" button. Can be dismissed for the session. An amber reminder banner also appears in the Activity tab itself.
+
+---
+
 ## [1.6.1] — 2026-05-27
 
 ### Changed
