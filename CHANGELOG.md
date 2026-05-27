@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.6] — 2026-05-27
+
+### Changed
+- Period Returns table rows now show a colored swatch matching each line's color in the Growth of $10,000 chart (portfolio and each benchmark), via a shared color helper so the chart and table stay in sync.
+
+---
+
 ## [1.6.5] — 2026-05-27
 
 ### Added

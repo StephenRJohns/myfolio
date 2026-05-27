@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.5';
+const MF_VERSION = 'v1.6.6';
 
 const state = {
   accounts: [],
@@ -2342,6 +2342,16 @@ function saveSelectedBenchmarks(ids) {
   localStorage.setItem('myfolio_benchmarks', JSON.stringify(ids));
 }
 
+// Line colors shared between the Growth of $10,000 chart and the Period Returns
+// table so a table row matches its line. Benchmarks are colored by their
+// position in the selected list (same order the chart assigns).
+const PORTFOLIO_LINE_COLOR = '#818cf8';
+const BENCHMARK_LINE_COLORS = ['#fb923c', '#34d399', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee', '#fbbf24', '#94a3b8', '#fda4af'];
+function benchmarkColorFor(id) {
+  const idx = getSelectedBenchmarks().indexOf(id);
+  return idx < 0 ? '#64748b' : BENCHMARK_LINE_COLORS[idx % BENCHMARK_LINE_COLORS.length];
+}
+
 // ── Benchmark fetcher: Stooq first, Yahoo Finance fallback ──────────────────
 // Generic SW-port fetch — opens a port to background.js, sends one request,
 // resolves with { ok, text, finalUrl } or { ok:false, error }. Used for any
@@ -2668,17 +2678,17 @@ function renderPerformance() {
           </tr></thead>
           <tbody>
             <tr class="highlight">
-              <td><strong>${escHtml(portfolioLabel)}</strong></td>
+              <td><span class="mf-legend-swatch" style="background:${PORTFOLIO_LINE_COLOR}"></span><strong>${escHtml(portfolioLabel)}</strong></td>
               ${returnCells(portfolioReturns)}
             </tr>
             ${benchmarkRows.map(b => b.series ? `
               <tr>
-                <td>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
+                <td><span class="mf-legend-swatch" style="background:${benchmarkColorFor(b.id)}"></span>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
                 ${returnCells(b.returns)}
               </tr>
             ` : `
               <tr>
-                <td>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
+                <td><span class="mf-legend-swatch" style="background:${benchmarkColorFor(b.id)}"></span>${b.label} <span style="color:#64748b;font-size:11px;font-family:monospace">${b.ticker}</span></td>
                 <td colspan="4" style="color:#64748b;font-size:12px;text-align:center;font-style:italic">
                   ${state.benchmarkErrors[b.ticker.toLowerCase()]
                     ? 'Unable to fetch market data — retry later'
@@ -2886,13 +2896,12 @@ function drawGrowthChart() {
   const selectedAcct = getSelectedAccount();
   const lines = [{
     label: selectedAcct ? selectedAcct.name : 'Your Portfolio',
-    color: '#818cf8',
+    color: PORTFOLIO_LINE_COLOR,
     width: 3,
     series: buildTwrSeries(portfolioSeries, filteredTransactions()),
   }];
 
-  const benchmarkColors = ['#fb923c', '#34d399', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee', '#fbbf24', '#94a3b8', '#fda4af'];
-  selected.forEach((id, i) => {
+  selected.forEach((id) => {
     const b = ALL_BENCHMARKS.find(x => x.id === id);
     if (!b) return;
     const series = state.benchmarkSeries[b.ticker.toLowerCase()];
@@ -2900,7 +2909,7 @@ function drawGrowthChart() {
     // Trim to portfolio's date window
     const filtered = series.filter(d => d.date >= portfolioStart && d.date <= portfolioEnd);
     if (filtered.length >= 2) {
-      lines.push({ label: b.ticker, color: benchmarkColors[i % benchmarkColors.length], width: 2, series: filtered });
+      lines.push({ label: b.ticker, color: benchmarkColorFor(id), width: 2, series: filtered });
     }
   });
 
