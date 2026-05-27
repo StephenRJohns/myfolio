@@ -6,7 +6,7 @@
 // and injects/updates the MyFolio dashboard overlay. No data leaves the browser
 // except public ETF price fetches to stooq.com for benchmark comparisons.
 
-const MF_VERSION = 'v1.6.4';
+const MF_VERSION = 'v1.6.5';
 
 const state = {
   accounts: [],
@@ -931,14 +931,21 @@ function normalizeBrokerageAccount(a) {
     }
     dbg('warn', `Account value NOT detected for "${a.accountName || a.nickName || id}" — copy this from the Debug tab and open a GitHub issue`, dump);
   }
+  let change = toNum(a.dayChange ?? a.mktValChange ?? null);
+  let changePct = toNum(a.dayChangePercentage ?? a.dayChangePct ?? null);
+  // AccountInfo returns a corrupted day change for accounts mid-rollover-
+  // settlement — it counts the phantom in-transit balance as a same-day
+  // gain/loss (e.g. −37% on a $693k account). A diversified account can't move
+  // that much in a day, so suppress implausible figures rather than show garbage.
+  if (changePct != null && Math.abs(changePct) > 30) { change = null; changePct = null; }
   return {
     id,
     accountNumber: String(a.accountNumber || ''),
     name: a.accountName || a.nickName || a.accountNumber || '',
     type: a.accountClassName || a.accountClassCode || '',
     value: det.value,
-    change: toNum(a.dayChange ?? a.mktValChange ?? null),
-    changePct: toNum(a.dayChangePercentage ?? a.dayChangePct ?? null),
+    change,
+    changePct,
     ytdReturn: toNum(a.ytdReturn ?? null),
     unrealizedGL: toNum(a.unrealizedGainLoss ?? a.uglt ?? null),
   };
@@ -1897,6 +1904,7 @@ function renderContent() {
     renderAllocationChart();
     initOverviewChart();
     drawAccountSparklines();
+    drawAccountComparisonChart();
     maybeShowStaleActivityDialog();
     return;
   }
@@ -2051,7 +2059,11 @@ function renderOverview() {
       <h3 class="mf-section-title">Accounts <span class="mf-hint">click any card to filter</span></h3>
       <div class="mf-account-grid">
         ${visibleAccounts.filter(a => a.id !== 'portfolio').map(renderAccountCard).join('')}
-      </div>` : !hasAccounts && !selectedAcct ? `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>` : ''}
+      </div>
+      ${visibleAccounts.filter(a => a.id !== 'portfolio').length >= 2 ? `
+      <h3 class="mf-section-title" style="margin-top:24px">Account Performance Comparison <span class="mf-hint">return since each account's start (deposits/withdrawals removed)</span></h3>
+      <canvas id="mf-acct-compare-chart" style="width:100%;display:block;height:280px;margin-bottom:28px"></canvas>
+      ` : ''}` : !hasAccounts && !selectedAcct ? `<div class="mf-empty">Waiting for account data — navigate to your account overview page.</div>` : ''}
 
       ${positionsCount ? `
       <h3 class="mf-section-title">Allocation</h3>
@@ -3070,9 +3082,26 @@ function drawCashFlowMarkers(ctx, seriesDates, xOfIndex, pad, ch, events) {
   return markers;
 }
 
+// Shared account color palette so a card's sparkline matches the account's line
+// in the performance-comparison chart. Keyed by account id, assigned in the same
+// order both views iterate (non-portfolio visible accounts).
+const MF_ACCOUNT_PALETTE = ['#818cf8', '#34d399', '#fb923c', '#facc15', '#60a5fa', '#f472b6', '#a78bfa', '#22d3ee'];
+function accountColorMap() {
+  const map = {};
+  state.accounts.filter(a => a.id !== 'portfolio' && !isHiddenZeroAccount(a))
+    .forEach((a, i) => { map[a.id] = MF_ACCOUNT_PALETTE[i % MF_ACCOUNT_PALETTE.length]; });
+  return map;
+}
+function hexToRgba(hex, a) {
+  const m = String(hex).replace('#', '');
+  const r = parseInt(m.slice(0, 2), 16), g = parseInt(m.slice(2, 4), 16), b = parseInt(m.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
 // Draw a simple value-over-time sparkline inside each account card. Uses the
 // per-account daily series (de-spiked to drop rollover-settlement glitches).
 function drawAccountSparklines() {
+  const colorMap = accountColorMap();
   document.querySelectorAll('canvas.mf-account-spark').forEach(canvas => {
     const id = canvas.dataset.acctId;
     const raw = (state.accountDailyValues && state.accountDailyValues[id]) || [];
@@ -3098,12 +3127,13 @@ function drawAccountSparklines() {
     const cw = W - pad * 2, ch = H - pad * 2;
     const xOf = i => pad + (i / (vals.length - 1)) * cw;
     const yOf = v => pad + ch - ((v - minV) / range) * ch;
-    const up = vals[vals.length - 1] >= vals[0];
-    const color = up ? '#34d399' : '#f87171';
+    // Use the account's palette color so the card sparkline matches its line in
+    // the performance-comparison chart below.
+    const color = colorMap[id] || '#818cf8';
 
     const grad = ctx.createLinearGradient(0, pad, 0, pad + ch);
-    grad.addColorStop(0, up ? 'rgba(52,211,153,0.28)' : 'rgba(248,113,113,0.28)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    grad.addColorStop(0, hexToRgba(color, 0.28));
+    grad.addColorStop(1, hexToRgba(color, 0));
     ctx.beginPath();
     ctx.moveTo(xOf(0), yOf(vals[0]));
     for (let i = 1; i < vals.length; i++) ctx.lineTo(xOf(i), yOf(vals[i]));
@@ -3119,6 +3149,108 @@ function drawAccountSparklines() {
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.stroke();
+  });
+}
+
+// Build a short, unique label for an account (names are often identical, so
+// fall back to the class + last-4 of the account number to disambiguate).
+function accountShortLabel(a) {
+  const shortType = (a.type || '').replace(/^SAM\s*-\s*/i, '').trim();
+  const last4 = a.accountNumber ? String(a.accountNumber).slice(-4) : '';
+  return [shortType, last4 ? '··' + last4 : ''].filter(Boolean).join(' ') || a.name || a.id;
+}
+
+// Compare each account's performance over time on one chart. Each line is the
+// account's cash-flow-adjusted return (TWR) indexed to 100 at its first day, so
+// accounts of very different sizes and deposit timing are directly comparable.
+function drawAccountComparisonChart() {
+  const canvas = document.getElementById('mf-acct-compare-chart');
+  if (!canvas) return;
+  const colorMap = accountColorMap();
+  const accts = state.accounts.filter(a => a.id !== 'portfolio' && !isHiddenZeroAccount(a));
+
+  const lines = [];
+  accts.forEach((a) => {
+    const dv = (state.accountDailyValues && state.accountDailyValues[a.id]) || [];
+    if (dv.length < 2) return;
+    const txns = state.transactions.filter(t => t.accountId === a.id);
+    const twr = buildTwrSeries(despikeSeries(dv), txns, 100);
+    if (twr.length < 2) return;
+    lines.push({ label: accountShortLabel(a), color: colorMap[a.id] || '#818cf8', points: twr.map(d => ({ date: d.date, value: d.close })) });
+  });
+
+  setupCanvas(canvas, 280);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth, H = 280;
+  const pad = { top: 16, right: 168, bottom: 36, left: 56 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+  drawChartBackground(ctx, W, H);
+
+  if (lines.length < 2) {
+    ctx.fillStyle = '#475569'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('Need at least two accounts with history to compare', W / 2, H / 2);
+    return;
+  }
+
+  const dateSet = new Set();
+  lines.forEach(l => l.points.forEach(p => dateSet.add(p.date)));
+  const allDates = [...dateSet].sort((a, b) => a.localeCompare(b));
+  const xOf = (date) => {
+    const idx = allDates.indexOf(date);
+    const r = idx < 0 ? 0 : idx / Math.max(1, allDates.length - 1);
+    return pad.left + r * cw;
+  };
+
+  let minY = Infinity, maxY = -Infinity;
+  lines.forEach(l => l.points.forEach(p => { if (p.value < minY) minY = p.value; if (p.value > maxY) maxY = p.value; }));
+  const spanPad = ((maxY - minY) || 1) * 0.08;
+  minY -= spanPad; maxY += spanPad;
+  const range = (maxY - minY) || 1;
+  const yOf = v => pad.top + ch - ((v - minY) / range) * ch;
+
+  // Y grid labeled as % from the 100 baseline
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1; ctx.font = '11px system-ui'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+    const pct = (maxY - range * (i / 4)) - 100;
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(`${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`, pad.left - 6, y + 4);
+  }
+
+  // Dashed reference line at the 100 baseline (0%)
+  if (100 >= minY && 100 <= maxY) {
+    const y100 = yOf(100);
+    ctx.strokeStyle = '#334155'; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(pad.left + cw, y100); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  drawXAxisDates(ctx, allDates, (d) => xOf(d), H, true);
+
+  lines.forEach(l => {
+    ctx.beginPath();
+    l.points.forEach((p, i) => {
+      const x = xOf(p.date), y = yOf(p.value);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = l.color; ctx.lineWidth = 2; ctx.stroke();
+  });
+
+  // Legend (right): colour chip, label, final % vs start
+  ctx.textAlign = 'left';
+  let ly = pad.top + 2;
+  lines.forEach(l => {
+    const finalPct = l.points[l.points.length - 1].value - 100;
+    ctx.fillStyle = l.color;
+    ctx.fillRect(W - pad.right + 10, ly, 10, 10);
+    ctx.fillStyle = '#e2e8f0'; ctx.font = '11px system-ui';
+    const name = l.label.length > 20 ? l.label.slice(0, 19) + '…' : l.label;
+    ctx.fillText(name, W - pad.right + 26, ly + 9);
+    ctx.fillStyle = finalPct >= 0 ? '#34d399' : '#f87171'; ctx.font = '12px system-ui';
+    ctx.fillText(`${finalPct >= 0 ? '+' : ''}${finalPct.toFixed(2)}%`, W - pad.right + 26, ly + 24);
+    ly += 32;
   });
 }
 

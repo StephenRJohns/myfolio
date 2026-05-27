@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.5] — 2026-05-27
+
+### Added
+- **Account Performance Comparison chart** on the Overview tab — one line per account, each indexed to 0% at its own start date and showing cash-flow-adjusted return (deposits/withdrawals removed), so accounts of different sizes and deposit timing are directly comparable. Legend distinguishes same-named accounts by class + last-4 of the account number.
+
+### Changed
+- Account-card sparklines now use a per-account palette color that matches the account's line in the comparison chart (shared color map), instead of a green/red up-down color.
+
+### Fixed
+- Suppressed implausible per-account day-change figures (e.g. −37% on a $693k account) that `AccountInfo` reports for accounts mid-rollover-settlement. The portfolio-level day change was already corrected via the intraday endpoint; this extends the same protection to individual accounts.
+
+---
+
 ## [1.6.4] — 2026-05-27
 
 ### Added
